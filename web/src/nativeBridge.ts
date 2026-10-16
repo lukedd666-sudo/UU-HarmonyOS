@@ -11,6 +11,11 @@ const messages: Record<string, string> = {
   NATIVE_FAILURE: '原生请求失败。',
   BAD_NATIVE_RESULT: '原生返回格式无法识别。',
   DOMAIN_BLOCKED: '请求地址不在允许的 UU 域名内。',
+  SIGNAL_ADDRESS_INVALID: 'UU 返回的信令地址格式无效。',
+  SIGNAL_SCHEME_BLOCKED: '信令地址协议不受支持，仅允许加密连接。',
+  SIGNAL_HOST_BLOCKED: '信令地址主机不在允许的 UU NRD 域名内。',
+  SIGNAL_PORT_INVALID: '信令地址端口无效。',
+  SIGNAL_PATH_BLOCKED: '信令地址路径不符合允许的 Socket.IO 路径。',
   SOCKET_CLOSED: '信令连接已关闭。',
   SIGNATURE_INVALID: '原生签名结果无效。',
   AUTH_REQUIRED: '请先使用本人账号登录。',
@@ -28,6 +33,7 @@ const messages: Record<string, string> = {
   MATERIAL_INVALID: '协议材料须为 8 至 64 字节。',
   MOBILE_INVALID: '请输入有效的国家区号和本人手机号。',
   CODE_INVALID: '请输入有效的短信验证码。',
+  ROOM_CLEANUP_REQUIRED: '上一次已加入的房间尚未清理，请先点击断开重试。',
 };
 export type ApiStage = 'INIT' | 'SMS' | 'LOGIN' | 'DEVICES' | 'JOIN' | 'LEAVE';
 export interface ErrorDiagnostics { stage?: ApiStage; httpStatus?: number; businessCode?: string }

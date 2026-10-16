@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { apiUrl, pollingUrl, signalUrl } from '../src/security';
+import { apiUrl, pollingUrl, signalPollingOrigin, signalUrl } from '../src/security';
 
 describe('credential destination boundaries', () => {
+  it('normalizes advertised secure host/port formats without retaining query material', () => {
+    for (const value of ['signal.nrd.nie.163.com:8443', 'wss://signal.nrd.nie.163.com:8443/', 'https://signal.nrd.nie.163.com:8443/socket.io?token=public-fixture']) {
+      expect(signalPollingOrigin(value)).toBe('https://signal.nrd.nie.163.com:8443');
+    }
+    expect(signalPollingOrigin('signal.nrd.nie.163.com:443')).toBe('https://signal.nrd.nie.163.com');
+    expect(pollingUrl('https://signal.nrd.nie.163.com:8443/socket.io/?EIO=4&transport=polling')).toContain(':8443/socket.io/');
+  });
+  it('keeps advertised endpoint normalization inside its secure destination boundary', () => {
+    for (const value of ['ws://signal.nrd.nie.163.com:8443', 'http://signal.nrd.nie.163.com', 'user:password@signal.nrd.nie.163.com', 'signal.nrd.nie.163.com.evil.test:8443', '127.0.0.1:8443', 'signal.nrd.nie.163.com:65536', 'signal.nrd.nie.163.com:0', 'signal.nrd.nie.163.com/private', 'signal.nrd.nie.163.com/socket.io/#fragment', 'signal.nrd.nie.163.com/../socket.io/', 'signal.nrd.nie.163.com/%73ocket.io/', 'signal.nrd.nie.163.com\\socket.io/']) {
+      expect(() => signalPollingOrigin(value)).toThrow();
+    }
+  });
   it('allows only supported API routes on the fixed API origin', () => {
     expect(apiUrl('/api/v1/login/by_mobile')).toBe('https://api.nrd.nie.163.com/api/v1/login/by_mobile');
     for (const path of ['https://evil.test/api/v1/a', '/api/v1/../login', '//evil.test/api/v1/a', '/api/v1/%2e%2e/a', '/api/v1/a#x']) {

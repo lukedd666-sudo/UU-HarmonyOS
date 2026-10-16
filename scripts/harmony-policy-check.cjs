@@ -18,6 +18,8 @@ for (const endpoint of [
   'https://api.nrd.nie.163.com/api/v2/room/join',
   'https://room-1.nrd.nie.163.com/api/v1/device',
   'https://signal.nrd.nie.163.com/socket.io/?EIO=4&transport=polling',
+  'https://signal.nrd.nie.163.com:8443/socket.io/?EIO=4&transport=polling',
+  'https://nrd.nie.163.com:28443/socket.io/?EIO=4&transport=polling',
 ]) {
   assert.equal(validateEndpoint(endpoint, false), endpoint); cases++;
 }
@@ -28,6 +30,10 @@ for (const endpoint of [
   'https://api.nrd.nie.163.com@evil.test/api/v1/login',
   'https://evil.test@api.nrd.nie.163.com/api/v1/login',
   'https://api.nrd.nie.163.com:80/api/v1/login',
+  'https://api.nrd.nie.163.com:8443/api/v1/login',
+  'https://signal.nrd.nie.163.com:0/socket.io/?EIO=4&transport=polling',
+  'https://signal.nrd.nie.163.com:65536/socket.io/?EIO=4&transport=polling',
+  'https://signal.nrd.nie.163.com:8443/socket.io/extra?EIO=4&transport=polling',
   'https://127.0.0.1/api/v1/login',
   'https://[::1]/api/v1/login',
   'https://api.nrd.nie.163.com./api/v1/login',

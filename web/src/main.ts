@@ -25,6 +25,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="section-title"><h2>我的桌面设备</h2><button id="refresh" type="button" class="text-button">刷新</button></div>
       <select id="devices" aria-label="选择本人 Mac 设备"><option value="">登录后读取设备列表</option></select>
       <button id="connect" type="button" class="primary wide">连接所选 Mac</button>
+      <button id="takeover" type="button" class="secondary wide" hidden>接管此 Mac</button>
+      <p id="takeover-warning" class="hint" hidden>接管会断开已有远控连接。仅在你确认后点击“接管此 Mac”。</p>
       <p class="hint">Mac 端需登录同一账号、在线并允许远程控制。首版只支持单屏、鼠标与基础键盘。</p>
       <details class="material"><summary>本机协议材料设置</summary><p class="hint">材料仅导入本机平台密钥库，用于原生请求签名。页面不保留材料，也不发送网络请求。</p><form id="material-form" autocomplete="off"><label for="material">协议签名材料</label><input id="material" type="password" autocomplete="off" spellcheck="false" placeholder="仅在本机输入合法获得的材料"><button id="save-material" type="submit" class="secondary wide">保存/替换至本机密钥库</button></form><p id="material-status" class="hint" aria-live="polite"></p></details>
     </aside>
@@ -45,22 +47,29 @@ let devices: OwnedDevice[] = [];
 let signal: SignalClient | null = null;
 let session: RemoteSession | null = null;
 let roomDevice = '';
+let takeoverDevice = '';
 let signalQueue: Promise<void> = Promise.resolve();
 let smsUntil = 0;
 
 function status(message: string, error = false): void {
-  element('status').textContent = message;
+  const cleanupWarning = '房间尚未清理，请点击断开重试清理。';
+  element('status').textContent = error && api.pendingRoomDeviceId && !session && !message.includes(cleanupWarning) ? `${message} ${cleanupWarning}` : message;
   element('status').closest('.status-panel')?.classList.toggle('error', error);
 }
 function update(): void {
   const busy = actions.busy;
-  for (const id of ['sms', 'login', 'init', 'save-material']) element<HTMLButtonElement>(id).disabled = busy || !bridge.available || Boolean(session);
+  const pendingRoom = Boolean(api.pendingRoomDeviceId);
+  for (const id of ['sms', 'login', 'init', 'save-material']) element<HTMLButtonElement>(id).disabled = busy || !bridge.available || Boolean(session) || (pendingRoom && api.loggedIn);
   element<HTMLButtonElement>('sms').disabled ||= smsUntil > Date.now();
   element<HTMLButtonElement>('refresh').disabled = busy || !api.loggedIn || Boolean(session);
   element<HTMLButtonElement>('logout').disabled = busy || !api.loggedIn;
-  element<HTMLButtonElement>('connect').disabled = busy || !api.loggedIn || !element<HTMLSelectElement>('devices').value || Boolean(session);
-  element<HTMLSelectElement>('devices').disabled = busy || Boolean(session);
-  element<HTMLButtonElement>('disconnect').disabled = busy || (!roomDevice && !session);
+  element<HTMLButtonElement>('connect').disabled = busy || !api.loggedIn || !element<HTMLSelectElement>('devices').value || Boolean(session) || pendingRoom;
+  element<HTMLSelectElement>('devices').disabled = busy || Boolean(session) || pendingRoom;
+  element<HTMLButtonElement>('disconnect').disabled = busy || (!roomDevice && !session && !pendingRoom);
+  const canTakeover = takeoverDevice !== '' && takeoverDevice === element<HTMLSelectElement>('devices').value && api.loggedIn && !pendingRoom && !session;
+  element('takeover').hidden = !canTakeover;
+  element('takeover-warning').hidden = !canTakeover;
+  element<HTMLButtonElement>('takeover').disabled = busy || !canTakeover;
   capture.disabled = !session?.inputReady;
   if (capture.disabled) capture.checked = false;
 }
@@ -86,6 +95,7 @@ function mobileInput(): [string, string] {
   return [region, mobile];
 }
 async function refreshDevices(): Promise<void> {
+  takeoverDevice = '';
   devices = await api.devices();
   const select = element<HTMLSelectElement>('devices');
   select.replaceChildren(new Option('请选择在线的本人 Mac', ''));
@@ -105,12 +115,13 @@ function clearLocalSession(): void {
   update();
 }
 async function disconnect(): Promise<void> {
-  const device = roomDevice; roomDevice = '';
+  const device = api.pendingRoomDeviceId || roomDevice;
   clearLocalSession();
-  if (device && api.loggedIn) {
+  if (device) {
     status('本地连接已断开，正在离开 UU 房间');
     await api.leave(device);
   }
+  roomDevice = '';
   status('已断开连接');
 }
 
@@ -135,15 +146,23 @@ element('login-form').addEventListener('submit', event => { event.preventDefault
 element('init').addEventListener('click', () => void run(async () => { status('正在初始化主控设备'); await api.initialize(); status('主控设备已初始化，可继续本人短信登录。'); }));
 element('refresh').addEventListener('click', () => void run(refreshDevices));
 element('devices').addEventListener('change', () => {
+  takeoverDevice = '';
   const selected = devices.find(device => device.deviceId === element<HTMLSelectElement>('devices').value);
   element('target-name').textContent = selected?.name ?? '尚未选择设备'; update();
 });
-element('connect').addEventListener('click', () => void run(async () => {
+async function connectSelected(forceJoin = false): Promise<void> {
   if (!globalThis.RTCPeerConnection) throw new ControllerError('WEBRTC_UNSUPPORTED');
   const selected = devices.find(device => device.deviceId === element<HTMLSelectElement>('devices').value);
   if (!selected?.mac || !selected.controllable) throw new ControllerError('API_FORMAT');
+  if (forceJoin && (takeoverDevice !== selected.deviceId || api.pendingRoomDeviceId || session)) return;
+  takeoverDevice = '';
   status('正在加入本人 Mac 的 UU 房间');
-  const room = await api.join(selected.deviceId);
+  let room;
+  try { room = await api.join(selected.deviceId, forceJoin); }
+  catch (error) {
+    if (error instanceof ControllerError && error.code === 'API_REJECTED' && error.diagnostics.stage === 'JOIN' && error.diagnostics.businessCode === '2002' && !api.pendingRoomDeviceId) takeoverDevice = selected.deviceId;
+    throw error;
+  }
   roomDevice = selected.deviceId;
   const connection = new SignalClient(bridge, event => {
     signalQueue = signalQueue.then(async () => { if (signal === connection) await session?.apply(event); }).catch(() => { status('无法应用远端信令，请断开后重试。', true); });
@@ -164,14 +183,17 @@ element('connect').addEventListener('click', () => void run(async () => {
   } catch (error) {
     if (signal !== connection) return;
     clearLocalSession();
-    const device = roomDevice; roomDevice = '';
-    if (device) await api.leave(device).catch(() => {});
+    const device = api.pendingRoomDeviceId || roomDevice;
+    if (device) { try { await api.leave(device); } catch { /* The owned handle remains pending; retain the connection failure. */ } }
+    if (!api.pendingRoomDeviceId) roomDevice = '';
     throw error;
   }
-}));
+}
+element('connect').addEventListener('click', () => void run(() => connectSelected(false)));
+element('takeover').addEventListener('click', () => void run(() => connectSelected(true)));
 element('disconnect').addEventListener('click', () => void run(disconnect));
 element('logout').addEventListener('click', () => void run(async () => {
-  try { await disconnect(); } finally { api.clear(); devices = []; element<HTMLSelectElement>('devices').replaceChildren(new Option('登录后读取设备列表', '')); }
+  try { await disconnect(); } finally { takeoverDevice = ''; api.clear(); devices = []; element<HTMLSelectElement>('devices').replaceChildren(new Option('登录后读取设备列表', '')); }
   status('已退出，本次登录态已清除。');
 }));
 element('material-form').addEventListener('submit', event => { event.preventDefault(); void run(async () => {

@@ -11,9 +11,12 @@ function text(value: unknown): string { return typeof value === 'string' ? value
 
 export class UuClient {
   private state: LoginState = {};
+  private pendingRoom = '';
   constructor(private readonly bridge: NativeBridge) {}
   get loggedIn(): boolean { return Boolean(this.state.token && this.state.userId && this.state.deviceId); }
   get controllerDeviceId(): string { return this.state.deviceId ?? ''; }
+  get pendingRoomDeviceId(): string { return this.pendingRoom; }
+  // Explicit logout still removes credentials; keep the in-memory cleanup handle for reauthentication.
   clear(): void { this.state = {}; }
 
   async initialize(): Promise<void> {
@@ -37,6 +40,7 @@ export class UuClient {
     await this.request('SMS', request.method, request.path, request.body, false);
   }
   async login(region: string, mobile: string, code: string): Promise<void> {
+    if (this.pendingRoom && this.loggedIn) throw new ControllerError('ROOM_CLEANUP_REQUIRED', { stage: 'LOGIN' });
     await this.initialize();
     const request = buildMobileLoginRequest({ regionCode: region, mobile, code });
     const result = await this.request('LOGIN', request.method, request.path, request.body, false);
@@ -59,17 +63,30 @@ export class UuClient {
       }).filter(item => item.deviceId.length > 0);
     } catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
   }
-  async join(deviceId: string): Promise<StreamerRoomConfig> {
-    const result = await this.request('JOIN', 'POST', `/api/v1/room/join/by_device/${encodeURIComponent(deviceId)}`, { force_join: false });
+  async join(deviceId: string, forceJoin = false): Promise<StreamerRoomConfig> {
+    if (this.pendingRoom) throw new ControllerError('ROOM_CLEANUP_REQUIRED', { stage: 'JOIN' });
+    const result = await this.request('JOIN', 'POST', `/api/v1/room/join/by_device/${encodeURIComponent(deviceId)}`, { force_join: forceJoin === true });
+    const acknowledgement = asRecord(result.body).code;
+    if (acknowledgement !== 0 && acknowledgement !== 200) throw new ControllerError('API_FORMAT', result.diagnostics);
+    // Ownership starts only after the JOIN API has accepted this request, before local validation.
+    this.pendingRoom = deviceId;
     try {
       const config = normalizeStreamerRoomConfig(result.body);
       if (!config) throw new ControllerError('API_FORMAT');
       config.signalServers = config.signalServers.map(signalPollingOrigin);
       return config;
-    } catch (error) { throw new ControllerError(error instanceof ControllerError ? error.code : 'API_FORMAT', result.diagnostics); }
+    } catch (error) {
+      try { await this.leave(deviceId); } catch { /* Preserve the original JOIN error; pendingRoom keeps cleanup retryable. */ }
+      throw new ControllerError(error instanceof ControllerError ? error.code : 'API_FORMAT', result.diagnostics);
+    }
   }
   async leave(deviceId: string): Promise<void> {
-    await this.request('LEAVE', 'POST', `/api/v1/room/clear/by_device/${encodeURIComponent(deviceId)}`);
+    // Never clear a room this instance did not successfully join, including refused JOINs.
+    if (this.pendingRoom !== deviceId || !deviceId) return;
+    const result = await this.request('LEAVE', 'POST', `/api/v1/room/clear/by_device/${encodeURIComponent(deviceId)}`);
+    const acknowledgement = asRecord(result.body).code;
+    if (acknowledgement !== 0 && acknowledgement !== 200) throw new ControllerError('API_FORMAT', result.diagnostics);
+    this.pendingRoom = '';
   }
   private async request(stage: ApiStage, method: string, path: string, body?: unknown, requireAuth = true): Promise<{ body: unknown; diagnostics: ErrorDiagnosticsInput }> {
     const diagnostics: ErrorDiagnosticsInput = { stage };

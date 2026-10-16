@@ -7,20 +7,28 @@ export function validateEndpoint(raw: string, websocket: boolean): string {
   if (typeof raw !== 'string' || raw.length > 16384 || /[\s\\\u0000-\u001f\u007f]/.test(raw)) {
     throw new Error('ENDPOINT_BLOCKED');
   }
-  const pattern = websocket ? /^wss:\/\/([a-zA-Z0-9.-]+)(?::443)?(\/[^#]*)$/ :
-    /^https:\/\/([a-zA-Z0-9.-]+)(?::443)?(\/[^#]*)$/;
+  const pattern = websocket ? /^wss:\/\/([a-zA-Z0-9.-]+)(?::([0-9]{1,5}))?(\/[^#]*)$/ :
+    /^https:\/\/([a-zA-Z0-9.-]+)(?::([0-9]{1,5}))?(\/[^#]*)$/;
   const match = raw.match(pattern);
   if (match === null) {
     throw new Error('ENDPOINT_BLOCKED');
   }
   const hostname = match[1].toLowerCase();
-  if (hostname !== 'api.nrd.nie.163.com' && !hostname.endsWith('.nrd.nie.163.com')) {
+  const port = match[2] === undefined ? 443 : Number(match[2]);
+  const path = match[3].split('?')[0];
+  const polling = !websocket && path === '/socket.io/';
+  // The API keeps its fixed TLS port. Dynamic signaling may advertise a
+  // different TLS port, but only at the exact Engine.IO polling route.
+  if (port < 1 || port > 65535 || (port !== 443 && !polling)) {
+    throw new Error('ENDPOINT_BLOCKED');
+  }
+  if (hostname !== 'api.nrd.nie.163.com' && !hostname.endsWith('.nrd.nie.163.com') &&
+    !(polling && hostname === 'nrd.nie.163.com')) {
     throw new Error('HOST_BLOCKED');
   }
   if (!/^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/.test(hostname)) {
     throw new Error('HOST_BLOCKED');
   }
-  const path = match[2].split('?')[0];
   // Reject encoded or literal path separators and dot segments before native URL normalization.
   if (path.includes('%') || /(?:^|\/)\.{1,2}(?:\/|$)/.test(path) || path.indexOf('//') >= 0) {
     throw new Error('PATH_BLOCKED');
