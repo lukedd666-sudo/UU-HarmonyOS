@@ -29,8 +29,22 @@ const messages: Record<string, string> = {
   MOBILE_INVALID: '请输入有效的国家区号和本人手机号。',
   CODE_INVALID: '请输入有效的短信验证码。',
 };
+export type ApiStage = 'INIT' | 'SMS' | 'LOGIN' | 'DEVICES' | 'JOIN' | 'LEAVE';
+export interface ErrorDiagnostics { stage?: ApiStage; httpStatus?: number; businessCode?: string }
+export interface ErrorDiagnosticsInput { stage?: ApiStage; httpStatus?: unknown; businessCode?: unknown }
 export class ControllerError extends Error {
-  constructor(public readonly code: string) { super(messages[code] ?? messages.NATIVE_FAILURE); }
+  readonly code: string;
+  readonly diagnostics: Readonly<ErrorDiagnostics>;
+  constructor(code: string, input: ErrorDiagnosticsInput = {}) {
+    const safeCode = Object.prototype.hasOwnProperty.call(messages, code) ? code : 'NATIVE_FAILURE';
+    super(messages[safeCode]);
+    this.code = safeCode;
+    const stage = ['INIT', 'SMS', 'LOGIN', 'DEVICES', 'JOIN', 'LEAVE'].includes(input.stage ?? '') ? input.stage : undefined;
+    const httpStatus = typeof input.httpStatus === 'number' && Number.isInteger(input.httpStatus) && input.httpStatus >= 100 && input.httpStatus <= 599 ? input.httpStatus : undefined;
+    const value = typeof input.businessCode === 'number' && Number.isInteger(input.businessCode) ? String(input.businessCode) : input.businessCode;
+    const businessCode = typeof value === 'string' && /^\d{1,6}$/.test(value) ? value : undefined;
+    this.diagnostics = Object.freeze({ ...(stage ? { stage } : {}), ...(httpStatus === undefined ? {} : { httpStatus }), ...(businessCode === undefined ? {} : { businessCode }) });
+  }
 }
 type SocketListener = (event: string, payload: Record<string, unknown>) => void;
 

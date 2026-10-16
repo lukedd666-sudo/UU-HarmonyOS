@@ -1,5 +1,5 @@
 // API fields and signing canonicalization adapted from MIT upstream; see THIRD_PARTY_NOTICES.md.
-import { asRecord, ControllerError, type NativeBridge } from './nativeBridge';
+import { asRecord, ControllerError, type ApiStage, type ErrorDiagnosticsInput, type NativeBridge } from './nativeBridge';
 import { apiUrl, signalPollingOrigin } from './security';
 import { buildAndroidDeviceInitRequest, buildMobileCodeRequest, buildMobileLoginRequest, normalizeDeviceInitResult, normalizeMobileLoginResult } from './upstream/loginFlow';
 import { normalizeStreamerRoomConfig } from './upstream/roomConfig';
@@ -27,46 +27,53 @@ export class UuClient {
       manufacturer: 'Huawei', model: 'HarmonyOS PC', product: 'UU-REA',
       rom: 'HarmonyOS', abi: 'arm64-v8a', resolution: '1920x1080', screen_size: '1920x1080', dpi: 160,
     });
-    const result = await this.request(request.method, request.path, request.body, false);
-    try { this.state.deviceId = normalizeDeviceInitResult(result); }
-    catch { throw new ControllerError('API_FORMAT'); }
+    const result = await this.request('INIT', request.method, request.path, request.body, false);
+    try { this.state.deviceId = normalizeDeviceInitResult(result.body); }
+    catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
   }
   async sendMobileCode(region: string, mobile: string): Promise<void> {
     await this.initialize();
     const request = buildMobileCodeRequest({ regionCode: region, mobile });
-    await this.request(request.method, request.path, request.body, false);
+    await this.request('SMS', request.method, request.path, request.body, false);
   }
   async login(region: string, mobile: string, code: string): Promise<void> {
     await this.initialize();
     const request = buildMobileLoginRequest({ regionCode: region, mobile, code });
-    const result = await this.request(request.method, request.path, request.body, false);
+    const result = await this.request('LOGIN', request.method, request.path, request.body, false);
     try {
-      const login = normalizeMobileLoginResult(result);
+      const login = normalizeMobileLoginResult(result.body);
       this.state = { ...this.state, token: login.token, userId: login.userId };
-    } catch { throw new ControllerError('API_FORMAT'); }
+    } catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
   }
   async devices(): Promise<OwnedDevice[]> {
-    const body = asRecord(await this.request('GET', '/api/v1/device/groups/of/my'));
-    const data = asRecord(body.data ?? body);
-    if (!Array.isArray(data.desktop_devices)) throw new ControllerError('API_FORMAT');
-    return data.desktop_devices.map(value => {
-      const item = asRecord(value);
-      const deviceId = text(item.device_id) || text(item.deviceId) || text(item.id);
-      const platform = Number(item.platform);
-      return { deviceId, name: text(item.alias) || text(item.device_name) || text(item.deviceName) || text(item.name) || deviceId, mac: platform === 4, platform, controllable: [true, 1, '1', 'true'].includes(item.controllable as never) };
-    }).filter(item => item.deviceId.length > 0);
+    const result = await this.request('DEVICES', 'GET', '/api/v1/device/groups/of/my');
+    try {
+      const body = asRecord(result.body);
+      const data = asRecord(body.data ?? body);
+      if (!Array.isArray(data.desktop_devices)) throw new ControllerError('API_FORMAT');
+      return data.desktop_devices.map(value => {
+        const item = asRecord(value);
+        const deviceId = text(item.device_id) || text(item.deviceId) || text(item.id);
+        const platform = Number(item.platform);
+        return { deviceId, name: text(item.alias) || text(item.device_name) || text(item.deviceName) || text(item.name) || deviceId, mac: platform === 4, platform, controllable: [true, 1, '1', 'true'].includes(item.controllable as never) };
+      }).filter(item => item.deviceId.length > 0);
+    } catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
   }
   async join(deviceId: string): Promise<StreamerRoomConfig> {
-    const result = await this.request('POST', `/api/v1/room/join/by_device/${encodeURIComponent(deviceId)}`, { force_join: false });
-    const config = normalizeStreamerRoomConfig(result);
-    if (!config) throw new ControllerError('API_FORMAT');
-    config.signalServers = config.signalServers.map(signalPollingOrigin);
-    return config;
+    const result = await this.request('JOIN', 'POST', `/api/v1/room/join/by_device/${encodeURIComponent(deviceId)}`, { force_join: false });
+    try {
+      const config = normalizeStreamerRoomConfig(result.body);
+      if (!config) throw new ControllerError('API_FORMAT');
+      config.signalServers = config.signalServers.map(signalPollingOrigin);
+      return config;
+    } catch (error) { throw new ControllerError(error instanceof ControllerError ? error.code : 'API_FORMAT', result.diagnostics); }
   }
   async leave(deviceId: string): Promise<void> {
-    await this.request('POST', `/api/v1/room/clear/by_device/${encodeURIComponent(deviceId)}`);
+    await this.request('LEAVE', 'POST', `/api/v1/room/clear/by_device/${encodeURIComponent(deviceId)}`);
   }
-  private async request(method: string, path: string, body?: unknown, requireAuth = true): Promise<unknown> {
+  private async request(stage: ApiStage, method: string, path: string, body?: unknown, requireAuth = true): Promise<{ body: unknown; diagnostics: ErrorDiagnosticsInput }> {
+    const diagnostics: ErrorDiagnosticsInput = { stage };
+    try {
     const url = apiUrl(path);
     if (requireAuth && !this.loggedIn) throw new ControllerError('AUTH_REQUIRED');
     const headers: Record<string, string> = {
@@ -85,11 +92,15 @@ export class UuClient {
     if (this.state.token) headers.Authorization = `Bearer ${this.state.token}`;
     if (bodyText) headers['Content-Type'] = 'application/json; charset=utf-8';
     const response = await this.bridge.request<{ status: number; body: string }>({ op: 'http', url, method, headers, ...(bodyText ? { body: bodyText } : {}) });
-    if (response.status < 200 || response.status >= 300) throw new ControllerError('API_REJECTED');
+    diagnostics.httpStatus = response.status;
     let result: unknown;
-    try { result = JSON.parse(response.body); } catch { throw new ControllerError('API_FORMAT'); }
+    try { result = JSON.parse(response.body); }
+    catch { throw new ControllerError(response.status < 200 || response.status >= 300 ? 'API_REJECTED' : 'API_FORMAT'); }
     const code = asRecord(result).code;
+    diagnostics.businessCode = code;
+    if (response.status < 200 || response.status >= 300) throw new ControllerError('API_REJECTED');
     if (code !== undefined && code !== 0 && code !== 200) throw new ControllerError('API_REJECTED');
-    return result;
+    return { body: result, diagnostics: new ControllerError('API_FORMAT', diagnostics).diagnostics };
+    } catch (error) { throw new ControllerError(error instanceof ControllerError ? error.code : 'NATIVE_FAILURE', diagnostics); }
   }
 }

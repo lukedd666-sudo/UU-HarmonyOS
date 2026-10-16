@@ -5,6 +5,7 @@ import { SignalClient } from './signalClient';
 import { RemoteSession } from './remoteSession';
 import { saveProtocolMaterial } from './material';
 import { ActionGate, runInputAction, videoPoint } from './interactions';
+import { controllerDiagnosticRecord, controllerErrorText } from './errorText';
 
 const bridge = new NativeBridge(window as unknown as BridgeHost);
 const api = new UuClient(bridge);
@@ -64,13 +65,17 @@ function update(): void {
   if (capture.disabled) capture.checked = false;
 }
 function errorText(error: unknown): string {
-  return error instanceof ControllerError ? `${error.message} [${error.code}]` : '操作失败；请检查网络或当前 ArkWeb 的兼容性后重试。';
+  return controllerErrorText(error, api.loggedIn);
 }
 async function run(action: () => Promise<void>): Promise<void> {
   await actions.run(async () => {
     update();
     try { await action(); }
-    catch (error) { status(errorText(error), true); }
+    catch (error) {
+      const record = controllerDiagnosticRecord(error);
+      if (record !== null) console.info(record);
+      status(errorText(error), true);
+    }
   });
   update();
 }
@@ -124,6 +129,7 @@ element('login-form').addEventListener('submit', event => { event.preventDefault
   try { await api.login(region, mobile, code); }
   finally { element<HTMLInputElement>('code').value = ''; }
   element<HTMLInputElement>('mobile').value = '';
+  status('登录校验成功，正在读取设备列表。');
   await refreshDevices();
 }); });
 element('init').addEventListener('click', () => void run(async () => { status('正在初始化主控设备'); await api.initialize(); status('主控设备已初始化，可继续本人短信登录。'); }));

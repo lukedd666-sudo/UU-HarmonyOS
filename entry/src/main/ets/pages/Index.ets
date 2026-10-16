@@ -1,4 +1,5 @@
 import { webview } from '@kit.ArkWeb';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeBridge } from '../bridge/NativeBridge';
 import { isLocalEntry, isLocalResource } from '../bridge/NetworkPolicy';
 
@@ -60,6 +61,15 @@ struct Index {
         })
         .onOverrideUrlLoading((request) => !isLocalResource(request.getRequestUrl()))
         .onSslErrorEventReceive((event) => event.handler.handleCancel())
+        .onConsole((event) => {
+          const record = event.message.getMessage();
+          // Only fixed error metadata may enter device logs; never log arbitrary page text.
+          if (record.length <= 120 && /^UU_REA_DIAG\|(INIT|SMS|LOGIN|DEVICES|JOIN|LEAVE)\|[A-Z_]{3,40}\|(?:[1-5][0-9]{2}|-)\|(?:[0-9]{1,6}|-)$/.test(record)) {
+            hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', record);
+            return true;
+          }
+          return false;
+        })
     }
     .width('100%')
     .height('100%')
