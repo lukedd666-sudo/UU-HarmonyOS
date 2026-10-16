@@ -45,7 +45,7 @@ struct Index {
         })
         .onPageBegin((event) => {
           this.bridge.beginPage(isLocalEntry(event.url));
-          this.status = isLocalEntry(event.url) ? '本地界面 · 互通性待真机验证' : '已阻止非可信页面';
+          this.status = isLocalEntry(event.url) ? '本地界面 · UU互通性待验证' : '已阻止非可信页面';
         })
         .onPageEnd((event) => {
           this.status = isLocalEntry(event.url) ? '本地界面就绪 · 原生网络桥已启用' : '已阻止非可信页面';

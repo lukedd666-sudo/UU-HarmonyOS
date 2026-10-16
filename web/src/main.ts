@@ -32,7 +32,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="stage"><video id="desktop" autoplay playsinline muted tabindex="0" aria-label="远程 Mac 桌面，启用输入后点击此处使用鼠标和键盘"></video><div id="empty-stage"><div class="screen-mark">↗</div><h3>等待连接你的 Mac</h3><p>连接成功后，实时画面将在这里显示。</p><span>STANDARD WEBRTC / H.264</span></div></div>
       <div class="workspace-bottom"><label class="input-toggle"><input type="checkbox" id="capture">启用鼠标与键盘</label><span>点击画面获取键盘焦点 · 失焦自动释放按键</span></div>
       <div class="status-panel"><div class="status-indicator"></div><div><strong id="status" role="status" aria-live="polite">就绪</strong><p id="capabilities"></p></div></div>
-      <p class="footnote">实机互通待验证。SDP 协商、视频轨道、实际首帧与输入验收分别记录。</p>
+      <p class="footnote">UU 互通待验证。SDP 协商、视频轨道、实际首帧与输入验收分别记录。</p>
     </section>
   </main>`;
 
@@ -173,8 +173,8 @@ element('material-form').addEventListener('submit', event => { event.preventDefa
   element('material-status').textContent = '';
   try {
     await saveProtocolMaterial(bridge, input);
-    element('material-status').textContent = '已保存至本机平台密钥库，页面输入已清空。';
-    status('协议材料已配置，可由你点击初始化或获取验证码。');
+    element('material-status').textContent = '已保存至本机平台密钥库，离线签名自检通过，页面输入已清空。';
+    status('离线签名自检通过；UU 服务兼容性待验证，可由你点击初始化。');
   } finally { input.value = ''; }
 }); });
 

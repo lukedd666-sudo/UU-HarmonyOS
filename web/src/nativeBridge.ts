@@ -23,6 +23,8 @@ const messages: Record<string, string> = {
   MATERIAL_IMPORT_UNSUPPORTED: '当前设备不支持协议材料导入。',
   MATERIAL_IMPORT_FAILED: '协议材料保存失败。',
   MATERIAL_REPLACE_FAILED: '替换失败，原材料可能已移除，请重新保存。',
+  MATERIAL_SELF_TEST_UNAVAILABLE: 'WebCrypto 不可用，无法完成离线签名自检，材料未保存。',
+  MATERIAL_SELF_TEST_MISMATCH: '离线签名自检不匹配，请检查材料并重新保存。',
   MATERIAL_INVALID: '协议材料须为 8 至 64 字节。',
   MOBILE_INVALID: '请输入有效的国家区号和本人手机号。',
   CODE_INVALID: '请输入有效的短信验证码。',
