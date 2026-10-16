@@ -1,7 +1,7 @@
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeBridge } from '../bridge/NativeBridge';
-import { isLocalEntry, isLocalResource } from '../bridge/NetworkPolicy';
+import { isLocalEntry, isLocalResource, isSafeDiagnosticRecord } from '../bridge/NetworkPolicy';
 
 @Entry
 @Component
@@ -63,8 +63,8 @@ struct Index {
         .onSslErrorEventReceive((event) => event.handler.handleCancel())
         .onConsole((event) => {
           const record = event.message.getMessage();
-          // Only fixed error metadata may enter device logs; never log arbitrary page text.
-          if (record.length <= 120 && /^UU_REA_DIAG\|(INIT|SMS|LOGIN|DEVICES|JOIN|LEAVE)\|[A-Z_]{3,40}\|(?:[1-5][0-9]{2}|-)\|(?:[0-9]{1,6}|-)$/.test(record)) {
+          // Only validated error or public server metadata; never arbitrary page text.
+          if (isSafeDiagnosticRecord(record)) {
             hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', record);
             return true;
           }

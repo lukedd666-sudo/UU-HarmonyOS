@@ -10,7 +10,7 @@ const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/bridg
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }, fileName: 'NetworkPolicy.ts' }).outputText;
 const moduleState = { exports: {} };
 vm.runInNewContext(compiled, { exports: moduleState.exports, module: moduleState });
-const { validateEndpoint, validateHeaders, validateHttpRequest, validateWebSocketRequest, isPollingEndpoint, isLocalEntry, isLocalResource } = moduleState.exports;
+const { validateEndpoint, validateHeaders, validateHttpRequest, validateWebSocketRequest, isPollingEndpoint, isLocalEntry, isLocalResource, isSafeDiagnosticRecord } = moduleState.exports;
 let cases = 0;
 for (const endpoint of [
   'https://api.nrd.nie.163.com/api/v1/login',
@@ -80,4 +80,20 @@ assert.equal(isLocalEntry('https://api.nrd.nie.163.com/index.html'), false); cas
 assert.equal(isLocalResource('resource://rawfile/assets/index-abc.js'), true); cases++;
 assert.equal(isLocalResource('resource://rawfile/../private'), false); cases++;
 assert.equal(isLocalResource('file:///data/private'), false); cases++;
+for (const record of [
+  'UU_REA_DIAG|JOIN|SIGNAL_HOST_BLOCKED|200|0',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|8443',
+  'UU_REA_SIGNAL_ORIGIN|https|[2001:db8::1]|443',
+]) { assert.equal(isSafeDiagnosticRecord(record), true); cases++; }
+for (const record of [
+  'UU_REA_SIGNAL_ORIGIN|http|gateway.example.com|443',
+  'UU_REA_SIGNAL_ORIGIN|https|user:private-password@gateway.example.com|443',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com?token=private-token|443',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com/private-path|443',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|0',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|65536',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|443|private-token',
+  'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com\nprivate-token|443',
+  'UU_REA_SIGNAL_ORIGIN|https|' + 'a'.repeat(254) + '|443',
+]) { assert.equal(isSafeDiagnosticRecord(record), false); cases++; }
 console.log(`Native network policy: ${cases} checks passed (offline host execution).`);

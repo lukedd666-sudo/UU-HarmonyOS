@@ -1,7 +1,9 @@
-import { expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ControllerError, NativeBridge, type BridgeHost } from '../src/nativeBridge';
 import { UuClient } from '../src/uuClient';
 import { controllerDiagnosticRecord, controllerErrorText } from '../src/errorText';
+beforeEach(() => { vi.spyOn(console, 'info').mockImplementation(() => {}); });
+afterEach(() => vi.restoreAllMocks());
 
 it('maps confirmed invalid verification code only for a login refusal, retaining safe metadata', () => {
   const explanation = '短信验证码无效，请重新获取并使用最新收到的验证码';
@@ -47,6 +49,22 @@ it('clears only its successful JOIN when local signal endpoint validation fails'
   await api.login('86', '13800138000', '123456');
   await expect(api.join('owned-mac')).rejects.toMatchObject({ code: 'SIGNAL_HOST_BLOCKED', diagnostics: { stage: 'JOIN', httpStatus: 200, businessCode: '0' } });
   expect(calls.map(url => new URL(url).pathname)).toEqual(['/api/v1/room/join/by_device/owned-mac', '/api/v1/room/clear/by_device/owned-mac']);
+  expect(api.pendingRoomDeviceId).toBe('');
+});
+
+it('records only a canonical blocked signal origin without query or room token and still leaves the owned room', async () => {
+  let leaves = 0;
+  const api = diagnosticClient(url => {
+    if (url.endsWith('/login/by_mobile')) return { status: 200, body: { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } } };
+    if (url.includes('/room/clear/')) { leaves++; return { status: 200, body: { code: 0 } }; }
+    return { status: 200, body: { code: 0, data: { room_config: { token: 'fixture-private-room-token', signal_servers: ['wss://Signal.Unverified.Example:8443/?room_token=fixture-private-query'] } } } };
+  });
+  await api.login('86', '13800138000', '123456');
+  await expect(api.join('owned-mac')).rejects.toMatchObject({ code: 'SIGNAL_HOST_BLOCKED' });
+  expect(vi.mocked(console.info).mock.calls).toEqual([['UU_REA_SIGNAL_ORIGIN|https|signal.unverified.example|8443']]);
+  expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('fixture-private');
+  expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('?');
+  expect(leaves).toBe(1);
   expect(api.pendingRoomDeviceId).toBe('');
 });
 

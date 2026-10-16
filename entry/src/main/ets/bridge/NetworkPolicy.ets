@@ -3,6 +3,18 @@ export const MAX_BRIDGE_JSON = 1048576;
 export const MAX_HTTP_BODY_CHARS = 65536;
 export const MAX_SOCKET_DATA_CHARS = 1048576;
 
+/** Keep device logs limited to fixed errors or canonical public server metadata. */
+export function isSafeDiagnosticRecord(record: string): boolean {
+  if (typeof record !== 'string' || record.length > 300) return false;
+  if (record.length <= 120 && /^UU_REA_DIAG\|(INIT|SMS|LOGIN|DEVICES|JOIN|LEAVE)\|[A-Z_]{3,40}\|(?:[1-5][0-9]{2}|-)\|(?:[0-9]{1,6}|-)$/.test(record)) return true;
+  const parts = record.split('|');
+  if (parts.length !== 4 || parts[0] !== 'UU_REA_SIGNAL_ORIGIN' || parts[1] !== 'https') return false;
+  const host = parts[2];
+  const dnsHost = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$/;
+  if (host.length > 253 || !(dnsHost.test(host) || /^\[[0-9a-f:]+\]$/.test(host))) return false;
+  return /^[1-9][0-9]{0,4}$/.test(parts[3]) && Number(parts[3]) <= 65535;
+}
+
 export function validateEndpoint(raw: string, websocket: boolean): string {
   if (typeof raw !== 'string' || raw.length > 16384 || /[\s\\\u0000-\u001f\u007f]/.test(raw)) {
     throw new Error('ENDPOINT_BLOCKED');

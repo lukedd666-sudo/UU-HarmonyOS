@@ -1,6 +1,6 @@
 // API fields and signing canonicalization adapted from MIT upstream; see THIRD_PARTY_NOTICES.md.
 import { asRecord, ControllerError, type ApiStage, type ErrorDiagnosticsInput, type NativeBridge } from './nativeBridge';
-import { apiUrl, signalPollingOrigin } from './security';
+import { apiUrl, signalOriginDiagnosticRecord, signalPollingOrigin } from './security';
 import { buildAndroidDeviceInitRequest, buildMobileCodeRequest, buildMobileLoginRequest, normalizeDeviceInitResult, normalizeMobileLoginResult } from './upstream/loginFlow';
 import { normalizeStreamerRoomConfig } from './upstream/roomConfig';
 import type { LoginState, StreamerRoomConfig } from './upstream/types';
@@ -73,7 +73,16 @@ export class UuClient {
     try {
       const config = normalizeStreamerRoomConfig(result.body);
       if (!config) throw new ControllerError('API_FORMAT');
-      config.signalServers = config.signalServers.map(signalPollingOrigin);
+      config.signalServers = config.signalServers.map(value => {
+        try { return signalPollingOrigin(value); }
+        catch (error) {
+          if (error instanceof ControllerError && error.code === 'SIGNAL_HOST_BLOCKED') {
+            const record = signalOriginDiagnosticRecord(value);
+            if (record !== null) console.info(record);
+          }
+          throw error;
+        }
+      });
       return config;
     } catch (error) {
       try { await this.leave(deviceId); } catch { /* Preserve the original JOIN error; pendingRoom keeps cleanup retryable. */ }

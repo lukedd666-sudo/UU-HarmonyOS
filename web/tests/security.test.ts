@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { apiUrl, pollingUrl, signalPollingOrigin, signalUrl } from '../src/security';
+import { apiUrl, pollingUrl, signalOriginDiagnosticRecord, signalPollingOrigin, signalUrl } from '../src/security';
 
 describe('credential destination boundaries', () => {
+  it('limits blocked-origin diagnostics to canonical host and port without room or account fields', () => {
+    expect(signalOriginDiagnosticRecord('wss://Gateway.Example.com:8443/socket.io/?token=private-room-token&account=private-account')).toBe('UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|8443');
+    expect(signalOriginDiagnosticRecord('gateway.example.com')).toBe('UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|443');
+    expect(signalOriginDiagnosticRecord('wss://[2001:db8::1]:8443/')).toBe('UU_REA_SIGNAL_ORIGIN|https|[2001:db8::1]|8443');
+    for (const value of ['https://user:private-password@gateway.example.com/', 'https://gateway.example.com/#private-token', 'https://gateway.example.com/\nprivate-token', 'http://gateway.example.com/', 'wss://gateway.example.com:0/', 'not a URL']) expect(signalOriginDiagnosticRecord(value)).toBeNull();
+  });
   it('normalizes advertised secure host/port formats without retaining query material', () => {
     for (const value of ['signal.nrd.nie.163.com:8443', 'wss://signal.nrd.nie.163.com:8443/', 'https://signal.nrd.nie.163.com:8443/socket.io?token=public-fixture']) {
       expect(signalPollingOrigin(value)).toBe('https://signal.nrd.nie.163.com:8443');

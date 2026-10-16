@@ -1,4 +1,17 @@
 import { ControllerError } from './nativeBridge';
+/** Public server metadata only. Never include URL paths, queries or userinfo. */
+export function signalOriginDiagnosticRecord(value: string): string | null {
+  if (typeof value !== 'string' || !value || value.length > 16384 || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;
+  try {
+    const url = new URL(value.includes('://') ? value : `wss://${value}`);
+    const host = url.hostname;
+    const port = url.port ? Number(url.port) : 443;
+    const dnsHost = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$/;
+    if (!['https:', 'wss:'].includes(url.protocol) || url.username || url.password || url.hash || host.length > 253 ||
+      !(dnsHost.test(host) || /^\[[0-9a-f:]+\]$/.test(host)) || port < 1 || port > 65535) return null;
+    return `UU_REA_SIGNAL_ORIGIN|https|${host}|${port}`;
+  } catch { return null; }
+}
 export function pollingUrl(value: string): string {
   const url = new URL(value);
   const origin = signalPollingOrigin(value);
