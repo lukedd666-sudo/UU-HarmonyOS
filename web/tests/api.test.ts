@@ -3,6 +3,18 @@ import { ControllerError, NativeBridge, type BridgeHost } from '../src/nativeBri
 import { UuClient } from '../src/uuClient';
 import { controllerDiagnosticRecord, controllerErrorText } from '../src/errorText';
 
+it('maps confirmed invalid verification code only for a login refusal, retaining safe metadata', () => {
+  const explanation = '短信验证码无效，请重新获取并使用最新收到的验证码';
+  const login = new ControllerError('API_REJECTED', { stage: 'LOGIN', httpStatus: 400, businessCode: 1110 });
+  expect(controllerErrorText(login)).toContain(explanation);
+  expect(controllerErrorText(login)).toContain('阶段 LOGIN · HTTP 400 · 业务码 1110');
+  expect(controllerDiagnosticRecord(login)).toBe('UU_REA_DIAG|LOGIN|API_REJECTED|400|1110');
+  const join = new ControllerError('API_REJECTED', { stage: 'JOIN', httpStatus: 400, businessCode: 1110 });
+  expect(controllerErrorText(join)).not.toContain(explanation);
+  expect(controllerErrorText(join)).toContain('阶段 JOIN · HTTP 400 · 业务码 1110');
+  expect(controllerErrorText(new ControllerError('API_FORMAT', { stage: 'LOGIN', businessCode: 1110 }))).not.toContain(explanation);
+});
+
 it('blocks HTTP entirely if native signing material is absent', async () => {
   const requests: Record<string, unknown>[] = [];
   const host: BridgeHost = { UUBridge: { invoke(id, payload) { requests.push(JSON.parse(payload)); host.__uuNativeResult?.(id, false, '{"code":"MATERIAL_MISSING"}'); } } };

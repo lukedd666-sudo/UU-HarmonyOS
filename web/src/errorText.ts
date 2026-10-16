@@ -18,5 +18,8 @@ export function controllerErrorText(error: unknown, loggedIn = false): string {
   if (diagnostics.stage) details.push(`阶段 ${diagnostics.stage}`);
   if (diagnostics.httpStatus !== undefined) details.push(`HTTP ${diagnostics.httpStatus}`);
   if (diagnostics.businessCode !== undefined) details.push(`业务码 ${diagnostics.businessCode}`);
-  return `${diagnostics.stage ? stageText[diagnostics.stage] : ''}${error.message} [${details.join(' · ')}]`;
+  const explanation = error.code === 'API_REJECTED' && diagnostics.stage === 'LOGIN' && diagnostics.businessCode === '1110'
+    ? '短信验证码无效，请重新获取并使用最新收到的验证码'
+    : error.message;
+  return `${diagnostics.stage ? stageText[diagnostics.stage] : ''}${explanation} [${details.join(' · ')}]`;
 }
