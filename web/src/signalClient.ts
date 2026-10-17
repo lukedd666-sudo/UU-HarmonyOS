@@ -33,11 +33,11 @@ export class SignalClient {
   private lastKeyRefresh: number | undefined;
   private hasReconnectKey = false;
   private record(stage: string): void { if (!this.recorded.has(stage)) { this.recorded.add(stage); console.info(`UU_REA_RTC|${stage}`); } }
-  constructor(private readonly bridge: NativeBridge, private readonly onEvent: (value: RemoteSignalGatewayEvent) => void, private readonly onClose: () => void) {}
+  constructor(private readonly bridge: NativeBridge, private readonly onEvent: (value: RemoteSignalGatewayEvent) => void, private readonly onClose: () => void, private readonly isolateRelayCandidates = false) {}
   async connect(room: StreamerRoomConfig): Promise<void> {
     const server = signalPollingOrigin(room.signalServers[0] ?? '');
     const headers = buildStreamerSignalHeaders({ token: room.token, gzipSdp: false });
-    const socket = io(server, { autoConnect: false, forceNew: true, reconnection: false, upgrade: false, rememberUpgrade: false, timeout: Math.min(room.timeout || 15000, 30000), transports: [nativePollingTransport(this.bridge, headers)] });
+    const socket = io(server, { autoConnect: false, forceNew: true, reconnection: false, upgrade: false, rememberUpgrade: false, timeout: Math.min(room.timeout || 15000, 30000), transports: [nativePollingTransport(this.bridge, headers, this.isolateRelayCandidates)] });
     this.socket = socket;
     socket.onAny((event, ...payload: unknown[]) => {
       const kinds: Record<string, string> = { switch_network_notify: 'SWITCH_NETWORK', device_capability: 'DEVICE_CAPABILITY', streamer_push: 'STREAMER_PUSH', forward_setting: 'FORWARD_SETTING', publisher_disconnect: 'PUBLISHER_DISCONNECT', leave: 'LEAVE', left: 'LEFT' };

@@ -181,7 +181,7 @@ async function connectSelected(forceJoin = false): Promise<void> {
   }, () => {
     if (signal !== connection) return;
     clearLocalSession(); status('UU 信令连接已中断，请重新连接。', true);
-  });
+  }, selected.platform === 1);
   signal = connection;
   try {
     status('正在连接 UU 信令'); await connection.connect(room);

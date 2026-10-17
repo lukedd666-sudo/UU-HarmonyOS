@@ -42,6 +42,15 @@ export function isSafeDiagnosticRecord(record: string): boolean {
   if (/^UU_REA_SIGNAL_END\|(PING_TIMEOUT|TRANSPORT_ERROR|TRANSPORT_CLOSE|SERVER_DISCONNECT|CLIENT_DISCONNECT|PARSE_ERROR|OTHER)$/.test(record)) return true;
   if (/^UU_REA_RTC\|KEY_REFRESH_(OK|REJECTED|FAILED)$/.test(record)) return true;
   if (/^UU_REA_POLL\|(GET|POST)\|[1-5][0-9]{2}\|[0-9]{1,8}$/.test(record)) return true;
+  if (record === 'UU_REA_PING_RX') return true;
+  if (/^UU_REA_PONG_POST\|[1-9][0-9]{0,11}\|(BEGIN|OK|FAIL)\|[1-9][0-9]{0,11}$/.test(record) && !/[\r\n]/.test(record)) return true;
+  if (/^UU_REA_SOAC_POST\|[1-9][0-9]{0,11}\|(BEGIN|OK|FAIL)\|(?:0|[1-9][0-9]{0,11})\|(?:0|[1-9][0-9]{0,11})\|(MATCH|MISMATCH|MISSING)\|(PENDING|OK|OTHER|NONE)$/.test(record)) {
+    const fields = record.split('|');
+    return Number(fields[3]) + Number(fields[4]) > 0 &&
+      ((fields[2] === 'BEGIN' && fields[6] === 'PENDING') ||
+        (fields[2] === 'OK' && ['OK', 'OTHER', 'NONE'].includes(fields[6])) ||
+        (fields[2] === 'FAIL' && fields[6] === 'NONE'));
+  }
   if (/^UU_REA_HTTP_ERROR\|(GET|POST)\|(?:-?[0-9]{1,9}|-)\|[0-9]{1,8}$/.test(record)) return true;
   if (/^UU_REA_CONTROL_RESULT\|-?[0-9]{1,5}$/.test(record)) return true;
   if (/^UU_REA_RTC\|(SIGNAL_CONNECTED|CONTROL_OK|CONTROL_REJECTED|CONTROL_IDS_MISSING|OFFER_SENT|LOCAL_CANDIDATE|SOAC_ANSWER|SOAC_CANDIDATE|SOAC_OTHER|SOAC_ACK_OK|SOAC_ACK_REJECTED|PUSH_RECEIVED|SIGNAL_OTHER|NO_PEER|SCOPE_MISMATCH|ANSWER_EMPTY|ANSWER_APPLIED|APPLY_FAILED|ICE_CONNECTED|ICE_FAILED|VIDEO_TRACK|FIRST_FRAME|INPUT_SENT|INPUT_MOVE_SENT|INPUT_BUTTON_SENT|INPUT_KEY_SENT|CONTROL_DATA_RECEIVED|NATIVE_KEY_EVENT|INPUT_KEY_PRESS_SENT|INPUT_KEY_RELEASE_SENT)$/.test(record)) return true;
