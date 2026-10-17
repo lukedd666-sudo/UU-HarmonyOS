@@ -86,14 +86,16 @@ export class NativeBridge {
     };
   }
   get available(): boolean { return typeof this.host.UUBridge?.invoke === 'function'; }
-  request<T = unknown>(payload: Record<string, unknown>, options?: { longPoll: boolean }): Promise<T> {
+  request<T = unknown>(payload: Record<string, unknown>): Promise<T> {
     if (!this.available) return Promise.reject(new ControllerError('BRIDGE_MISSING'));
     const id = `req-${++this.next}`;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new ControllerError('NATIVE_TIMEOUT'));
-      }, options?.longPoll && payload.op === 'http' && payload.method === 'GET' ? 45000 : this.timeout);
+      // Native HTTP permits 30s for APIs and 40s for polling (including POST).
+      // Keep 5s for result delivery; never discard a live native request at 15s.
+      }, payload.op === 'http' ? 45000 : this.timeout);
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
       try { this.host.UUBridge!.invoke(id, JSON.stringify(payload)); }
       catch {

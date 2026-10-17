@@ -28,12 +28,22 @@ describe('native request lifecycle', () => {
     expect(error.code).toBe('MATERIAL_MISSING');
     expect(error.message).not.toContain('sensitive');
   });
-  it('allows only GET long polls to outlive the default deadline and caps them at 45 seconds', async () => {
+  it.each([{ method: 'GET', delay: 20000 }, { method: 'POST', delay: 39000 }])('accepts a $method HTTP result inside the native transport budget instead of losing it early', async ({ method, delay }) => {
+    vi.useFakeTimers();
+    let id = '';
+    const host: BridgeHost = { UUBridge: { invoke(value) { id = value; } } };
+    const bridge = new NativeBridge(host);
+    const pending = bridge.request({ op: 'http', method }).then(value => ({ ok: true, value }), error => ({ ok: false, code: error.code }));
+    await vi.advanceTimersByTimeAsync(delay);
+    host.__uuNativeResult?.(id, true, '{"status":200,"body":"fixture"}');
+    expect(await pending).toEqual({ ok: true, value: { status: 200, body: 'fixture' } });
+  });
+  it('caps HTTP bridge requests at 45 seconds while local secure operations retain their own deadline', async () => {
     vi.useFakeTimers();
     const bridge = new NativeBridge({ UUBridge: { invoke() {} } });
     let pollDone = false, hmacDone = false;
-    const poll = bridge.request({ op: 'http', method: 'GET' }, { longPoll: true }).catch(error => { pollDone = true; return error; });
-    const hmac = bridge.request({ op: 'hmac', message: 'fixture' }, { longPoll: true }).catch(error => { hmacDone = true; return error; });
+    const poll = bridge.request({ op: 'http', method: 'GET' }).catch(error => { pollDone = true; return error; });
+    const hmac = bridge.request({ op: 'hmac', message: 'fixture' }).catch(error => { hmacDone = true; return error; });
     await vi.advanceTimersByTimeAsync(16000);
     expect(hmacDone).toBe(true);
     expect(pollDone).toBe(false);
