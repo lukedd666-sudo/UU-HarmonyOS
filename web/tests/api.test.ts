@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ControllerError, NativeBridge, type BridgeHost } from '../src/nativeBridge';
 import { UuClient } from '../src/uuClient';
+import { SignalClient } from '../src/signalClient';
 import { controllerDiagnosticRecord, controllerErrorText } from '../src/errorText';
 beforeEach(() => { vi.spyOn(console, 'info').mockImplementation(() => {}); });
 afterEach(() => vi.restoreAllMocks());
@@ -29,6 +30,8 @@ function diagnosticClient(responseForPath: (url: string, request: Record<string,
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload);
     if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
+    else if (request.op === 'signal.route') host.__uuNativeResult?.(id, true, JSON.stringify({ bound: request.address !== '' }));
     else {
       const result = request.url.endsWith('/device/android/init')
         ? { status: 200, body: { code: 0, data: { device_id: 'fixture-controller' } } }
@@ -38,6 +41,80 @@ function diagnosticClient(responseForPath: (url: string, request: Record<string,
   } } };
   return new UuClient(new NativeBridge(host));
 }
+
+function routedClient(routeResult: (address: string) => { bound: boolean }) {
+  const requests: Record<string, unknown>[] = [], pendingPolls: string[] = [];
+  const host: BridgeHost = { UUBridge: { invoke(id, payload) {
+    const request = JSON.parse(payload); requests.push(request);
+    if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
+    else if (request.op === 'signal.route') {
+      try { host.__uuNativeResult?.(id, true, JSON.stringify(routeResult(request.address))); }
+      catch { host.__uuNativeResult?.(id, false, '{"code":"SIGNAL_ROUTE_FAILED"}'); }
+    } else if (request.op === 'http') {
+      const url = new URL(request.url);
+      if (url.pathname === '/socket.io/') { pendingPolls.push(id); return; }
+      const body = url.pathname.endsWith('/device/android/init') ? { code: 0, data: { device_id: 'fixture-controller' } }
+        : url.pathname.endsWith('/login/by_mobile') ? { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } }
+        : url.pathname.includes('/room/join/') ? { code: 0, data: { room_config: { token: 'fixture-room', signal_servers: ['42.186.225.118:8443', '8.8.8.8:443'] } } }
+        : { code: 0 };
+      host.__uuNativeResult?.(id, true, JSON.stringify({ status: 200, body: JSON.stringify(body), headers: {} }));
+    }
+  } } };
+  const bridge = new NativeBridge(host);
+  return { api: new UuClient(bridge), bridge, requests, finishPolls() {
+    for (const id of pendingPolls.splice(0)) host.__uuNativeResult?.(id, true, JSON.stringify({ status: 200, body: '1', headers: {} }));
+  } };
+}
+
+it('binds only the first public IP under the fixed NRD identity before any signal HTTP', async () => {
+  const { api, bridge, requests, finishPolls } = routedClient(address => ({ bound: address !== '' }));
+  await api.login('86', '13800138000', '123456');
+  const room = await api.join('owned-mac');
+  expect(room.signalServers).toEqual(['https://nrd.nie.163.com:8443', 'https://nrd.nie.163.com']);
+  expect(requests.filter(r => r.op === 'signal.route')).toEqual([{ op: 'signal.route', address: '42.186.225.118' }]);
+  const signal = new SignalClient(bridge, () => {}, () => {});
+  const connecting = signal.connect(room).catch(error => error);
+  const signalIndex = requests.findIndex(r => r.op === 'http' && new URL(r.url as string).pathname === '/socket.io/');
+  const bindIndex = requests.findIndex(r => r.op === 'signal.route');
+  expect(signalIndex).toBeGreaterThan(bindIndex);
+  expect(new URL(requests[signalIndex]!.url as string).origin).toBe('https://nrd.nie.163.com:8443');
+  signal.close(); finishPolls();
+  await connecting;
+  await api.leave('owned-mac');
+});
+
+it('clears a possibly partially bound route and its owned room when native route binding fails', async () => {
+  const { api, requests } = routedClient(address => { if (address) throw new Error('fixture bind failure'); return { bound: false }; });
+  await api.login('86', '13800138000', '123456');
+  await expect(api.join('owned-mac')).rejects.toMatchObject({ code: 'SIGNAL_ROUTE_FAILED', diagnostics: { stage: 'JOIN' } });
+  expect(requests.filter(r => r.op === 'signal.route').map(r => r.address)).toEqual(['42.186.225.118', '']);
+  expect(requests.some(r => r.op === 'http' && String(r.url).includes('/room/clear/'))).toBe(true);
+  expect(api.pendingRoomDeviceId).toBe('');
+});
+
+it('keeps a route-clear failure retryable across logout and blocks a new JOIN until route and room cleanup succeed', async () => {
+  let clearAttempts = 0;
+  const { api, requests } = routedClient(address => {
+    if (!address && ++clearAttempts === 1) throw new Error('fixture clear failure');
+    return { bound: Boolean(address) };
+  });
+  await api.login('86', '13800138000', '123456');
+  await api.join('owned-mac');
+  await expect(api.leave('owned-mac')).rejects.toMatchObject({ code: 'SIGNAL_ROUTE_FAILED', diagnostics: { stage: 'LEAVE' } });
+  expect(api.pendingRoomDeviceId).toBe('owned-mac');
+  expect(requests.filter(r => r.op === 'http' && String(r.url).includes('/room/clear/'))).toHaveLength(1);
+  api.clear();
+  expect(api.loggedIn).toBe(false);
+  const beforeBlockedJoin = requests.length;
+  await expect(api.join('another-mac')).rejects.toMatchObject({ code: 'ROOM_CLEANUP_REQUIRED' });
+  expect(requests).toHaveLength(beforeBlockedJoin);
+  await api.login('86', '13800138000', '123456');
+  await api.leave('owned-mac');
+  expect(clearAttempts).toBe(2);
+  expect(api.pendingRoomDeviceId).toBe('');
+  expect(requests.filter(r => r.op === 'http' && String(r.url).includes('/room/clear/'))).toHaveLength(1);
+});
 
 it('clears only its successful JOIN when local signal endpoint validation fails', async () => {
   const calls: string[] = [];
@@ -183,6 +260,7 @@ it('signs the exact JSON sent to native HTTP and keeps login state in memory unt
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload); requests.push(request);
     if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
     else {
       const body = request.url.endsWith('/device/android/init') ? { code: 0, data: { device_id: 'local-controller' } }
         : request.url.endsWith('/login/by_mobile') ? { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } }

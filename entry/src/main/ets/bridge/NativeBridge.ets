@@ -1,11 +1,14 @@
 import { webview } from '@kit.ArkWeb';
-import { http, webSocket } from '@kit.NetworkKit';
+import { connection, http, webSocket } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   MAX_BRIDGE_JSON, MAX_HTTP_BODY_CHARS, MAX_SOCKET_DATA_CHARS, validateHttpRequest, validateHeaders,
-  isPollingEndpoint, validateWebSocketRequest
+  isPollingEndpoint, validateWebSocketRequest, validateSignalAddress, SIGNAL_ROUTE_HOST
 } from './NetworkPolicy';
 import { signProtocolMessage, importProtocolMaterial } from './SigningMaterial';
+import { sessionOperation } from './SessionStore';
 
 interface BridgeRequest {
   op: string;
@@ -18,6 +21,7 @@ interface BridgeRequest {
   binary?: boolean;
   message?: string;
   material?: string;
+  address?: string;
 }
 
 interface HttpResult {
@@ -48,13 +52,21 @@ interface MaterialImportResult {
   imported: boolean;
 }
 
+interface SignalRouteResult {
+  bound: boolean;
+}
+
 export class NativeBridge {
   private controller: webview.WebviewController;
   private trusted: boolean = false;
   private generation: number = 0;
   private requests: Map<string, http.HttpRequest> = new Map();
+  private pollingIds: Set<string> = new Set();
+  private routeQueue: Promise<void> = Promise.resolve();
+  private routeAddress: string = '';
+  private routeDirty: boolean = false;
   private sockets: Map<string, webSocket.WebSocket> = new Map();
-  private pending: Set<string> = new Set();
+  private pending: Map<string, BridgeRequest> = new Map();
   private base64: util.Base64Helper = new util.Base64Helper();
 
   constructor(controller: webview.WebviewController) {
@@ -89,10 +101,10 @@ export class NativeBridge {
       this.result(id, false, { code: 'REQUEST_INVALID' } as BridgeFailure);
       return;
     }
-    this.pending.add(id);
+    this.pending.set(id, request);
     const generation = this.generation;
     this.dispatch(id, request, generation).catch(() => {
-      if (this.isCurrent(generation)) {
+      if (this.isCurrent(generation) && this.pending.get(id) === request) {
         this.result(id, false, { code: 'NATIVE_ERROR' } as BridgeFailure);
         this.pending.delete(id);
       }
@@ -104,7 +116,12 @@ export class NativeBridge {
       let payload: Object = {} as Record<string, string>;
       switch (request.op) {
         case 'http':
-          payload = await this.httpRequest(id, request);
+          payload = await this.httpRequest(id, request, generation);
+          break;
+        case 'signal.route':
+          const address = validateSignalAddress(request.address);
+          await this.queueSignalRoute(address, generation);
+          payload = { bound: address !== '' } as SignalRouteResult;
           break;
         case 'ws.open':
           await this.openSocket(request, generation);
@@ -123,14 +140,19 @@ export class NativeBridge {
         case 'hmac':
           payload = { hex: await signProtocolMessage(request.message ?? '') } as SigningResult;
           break;
+        case 'session.load':
+        case 'session.save':
+        case 'session.clear':
+          payload = await sessionOperation(request.op, request.data ?? '', () => this.isCurrent(generation));
+          break;
         default:
           throw new Error('OPERATION_BLOCKED');
       }
-      if (this.isCurrent(generation)) {
+      if (this.isCurrent(generation) && this.pending.get(id) === request) {
         this.result(id, true, payload);
       }
     } catch (error) {
-      if (this.isCurrent(generation)) {
+      if (this.isCurrent(generation) && this.pending.get(id) === request) {
         const message = (error as Error).message;
         // Network errors can contain URLs or bodies. Only fixed local error codes cross the bridge.
         const code = typeof message === 'string' && /^[A-Z][A-Z_]{2,48}$/.test(message) ? message : 'NETWORK_ERROR';
@@ -138,16 +160,25 @@ export class NativeBridge {
       }
     } finally {
       request.material = '';
-      if (this.isCurrent(generation)) {
+      request.data = '';
+      if (this.isCurrent(generation) && this.pending.get(id) === request) {
         this.pending.delete(id);
       }
     }
   }
 
-  private async httpRequest(id: string, request: BridgeRequest): Promise<HttpResult> {
+  private async httpRequest(id: string, request: BridgeRequest, generation: number): Promise<HttpResult> {
     const method = request.method ?? 'GET';
     const endpoint = validateHttpRequest(request.url ?? '', method);
     const headers = validateHeaders(request.headers);
+    const polling = isPollingEndpoint(endpoint);
+    if (polling) {
+      await this.routeQueue;
+      if (!this.isCurrent(generation) ||
+        (/^https:\/\/nrd\.nie\.163\.com(?::[0-9]+)?\//i.test(endpoint) && this.routeAddress === '')) {
+        throw new Error('SIGNAL_ROUTE_FAILED');
+      }
+    }
     if (request.body !== undefined && (typeof request.body !== 'string' || request.body.length > MAX_HTTP_BODY_CHARS)) {
       throw new Error('BODY_TOO_LARGE');
     }
@@ -159,6 +190,7 @@ export class NativeBridge {
     }
     const client = http.createHttp();
     this.requests.set(id, client);
+    if (polling) this.pollingIds.add(id);
     try {
       const options: http.HttpRequestOptions = {
         method: method as http.RequestMethod,
@@ -169,12 +201,21 @@ export class NativeBridge {
         readTimeout: isPollingEndpoint(endpoint) ? 40000 : 30000,
         maxLimit: 2097152,
         // API 23+: reject redirects so authentication never follows an unchecked destination.
-        maxRedirects: 0
+        maxRedirects: 0,
+        remoteValidation: 'system'
       };
+      if (polling) {
+        // A reused TCP connection could bypass a newly bound App DNS route.
+        options.usingProtocol = http.HttpProtocol.HTTP1_1;
+        headers.Connection = 'close';
+      }
       if (request.body !== undefined && request.body.length > 0) {
         options.extraData = request.body;
       }
       const response = await client.request(endpoint, options);
+      if (polling && this.requests.get(id) !== client) {
+        throw new Error('SIGNAL_ROUTE_FAILED');
+      }
       if (typeof response.result !== 'string' || response.result.length > 2097152) {
         throw new Error('RESPONSE_TOO_LARGE');
       }
@@ -192,8 +233,71 @@ export class NativeBridge {
       if (this.requests.get(id) === client) {
         client.destroy();
         this.requests.delete(id);
+        this.pollingIds.delete(id);
       }
     }
+  }
+
+  private cancelPolling(): void {
+    this.pollingIds.forEach((id: string) => {
+      const client = this.requests.get(id);
+      if (client !== undefined) {
+        try { client.destroy(); } catch (_) {}
+        this.requests.delete(id);
+      }
+      if (this.pending.has(id)) {
+        this.pending.delete(id);
+        this.result(id, false, { code: 'SOCKET_CLOSED' } as BridgeFailure);
+      }
+    });
+    this.pollingIds.clear();
+  }
+
+  /** One fixed App-local DNS rule; every mutation including disposal is serialized. */
+  private queueSignalRoute(address: string, generation: number, cleanup: boolean = false): Promise<void> {
+    const operation = this.routeQueue.then(async () => {
+      if (!cleanup && !this.isCurrent(generation)) throw new Error('SIGNAL_ROUTE_FAILED');
+      this.cancelPolling();
+      this.routeAddress = '';
+      let step: string = 'REMOVE';
+      try {
+        if (typeof connection.removeCustomDnsRule !== 'function' || typeof connection.addCustomDnsRule !== 'function') {
+          hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', 'UU_REA_ROUTE|CAPABILITY|MISSING');
+          throw new Error('SIGNAL_ROUTE_FAILED');
+        }
+        // Native musl rules live in this process. Removing a never-added rule
+        // returns -1 on API23, so only remove a rule this bridge may have set.
+        if (this.routeDirty) {
+          try { await connection.removeCustomDnsRule(SIGNAL_ROUTE_HOST); }
+          catch (error) {
+            // musl predefined_host_remove_host: -1 means no matching entry.
+            if ((error as BusinessError).code !== -1) throw error as Error;
+          }
+          this.routeDirty = false;
+        }
+        if (!cleanup && !this.isCurrent(generation)) throw new Error('SIGNAL_ROUTE_FAILED');
+        if (address !== '') {
+          step = 'ADD';
+          this.routeDirty = true;
+          await connection.addCustomDnsRule(SIGNAL_ROUTE_HOST, [address]);
+          if (!this.isCurrent(generation)) {
+            // A page disappeared while add was awaited. Remove before allowing
+            // the next queued page to bind, so stale completion cannot win.
+            await connection.removeCustomDnsRule(SIGNAL_ROUTE_HOST);
+            this.routeDirty = false;
+            throw new Error('SIGNAL_ROUTE_FAILED');
+          }
+          this.routeAddress = address;
+        }
+      } catch (error) {
+        const number = (error as BusinessError).code;
+        const code = typeof number === 'number' && Number.isInteger(number) && Math.abs(number) <= 99999999 ? String(number) : error instanceof TypeError ? 'TYPE_ERROR' : '-';
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_ROUTE|${step}|${code}`);
+        throw new Error('SIGNAL_ROUTE_FAILED');
+      }
+    });
+    this.routeQueue = operation.then(() => {}, () => {});
+    return operation;
   }
 
   private socketId(request: BridgeRequest): string {
@@ -285,6 +389,9 @@ export class NativeBridge {
       try { client.destroy(); } catch (_) {}
     });
     this.requests.clear();
+    this.pollingIds.clear();
+    this.routeAddress = '';
+    this.queueSignalRoute('', this.generation, true).catch(() => {});
     this.sockets.forEach((socket: webSocket.WebSocket, id: string) => this.releaseSocket(id, socket));
     this.sockets.clear();
     this.pending.clear();

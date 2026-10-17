@@ -28,13 +28,16 @@ export class SignalClient {
   private socket: Socket | null = null;
   private nextEvent = 0;
   private pending = new Set<(error: Error) => void>();
+  private recorded = new Set<string>();
+  private record(stage: string): void { if (!this.recorded.has(stage)) { this.recorded.add(stage); console.info(`UU_REA_RTC|${stage}`); } }
   constructor(private readonly bridge: NativeBridge, private readonly onEvent: (value: RemoteSignalGatewayEvent) => void, private readonly onClose: () => void) {}
   async connect(room: StreamerRoomConfig): Promise<void> {
     const server = signalPollingOrigin(room.signalServers[0] ?? '');
-    const headers = buildStreamerSignalHeaders({ token: room.token, gzipSdp: true });
+    const headers = buildStreamerSignalHeaders({ token: room.token, gzipSdp: false });
     const socket = io(server, { autoConnect: false, forceNew: true, reconnection: false, upgrade: false, rememberUpgrade: false, timeout: Math.min(room.timeout || 15000, 30000), transports: [nativePollingTransport(this.bridge, headers)] });
     this.socket = socket;
     socket.onAny((event, ...payload: unknown[]) => {
+      this.record(event === 'bmsg_push' ? 'PUSH_RECEIVED' : ['soac', 'answer', 'candidate', 'restart_ice'].includes(event) ? 'SOAC_OTHER' : 'SIGNAL_OTHER');
       for (const normalized of normalizeSignalGatewayInboundEvents(event, payload, binary)) {
         this.onEvent({ id: ++this.nextEvent, direction: 'inbound', event: normalized.event, payload: normalized.payload, receivedAt: new Date().toISOString() });
       }
@@ -47,7 +50,7 @@ export class SignalClient {
     await new Promise<void>((resolve, reject) => {
       const cancelled = (error: Error) => { cleanup(); reject(error); };
       const cleanup = () => { socket.off('connect', connected); socket.off('connect_error', failed); this.pending.delete(cancelled); };
-      const connected = () => { cleanup(); resolve(); };
+      const connected = () => { this.record('SIGNAL_CONNECTED'); cleanup(); resolve(); };
       const failed = () => { cleanup(); socket.disconnect(); reject(new ControllerError('SIGNAL_FAILED')); };
       socket.once('connect', connected);
       socket.once('connect_error', failed);
@@ -64,7 +67,10 @@ export class SignalClient {
   async sendSignalSoac(input: RemoteSignalSoacRequest): Promise<RemoteSignalSoacResult> {
     if (!this.socket?.connected) throw new ControllerError('SOCKET_CLOSED');
     const payload = buildSignalGatewaySoacPayload(input, binary);
-    this.socket.emit('soac', payload);
+    this.socket.emit('soac', payload, (...ack: unknown[]) => {
+      const result = asRecord(ack.find(value => value !== null && typeof value === 'object'));
+      this.record((ack[0] === 'success' || result.code === 0) && (result.code === undefined || result.code === 0) ? 'SOAC_ACK_OK' : 'SOAC_ACK_REJECTED');
+    });
     return { event: 'soac', payload: null, emittedAt: new Date().toISOString() };
   }
   close(): void {

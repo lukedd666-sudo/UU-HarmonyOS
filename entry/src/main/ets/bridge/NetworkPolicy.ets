@@ -2,10 +2,35 @@
 export const MAX_BRIDGE_JSON = 1048576;
 export const MAX_HTTP_BODY_CHARS = 65536;
 export const MAX_SOCKET_DATA_CHARS = 1048576;
+export const SIGNAL_ROUTE_HOST = 'nrd.nie.163.com';
+
+/** Accept one canonical globally routable IPv4, or an explicit empty clear. */
+export function validateSignalAddress(raw?: string): string {
+  if (raw === '') return '';
+  if (typeof raw !== 'string' || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/.test(raw)) {
+    throw new Error('SIGNAL_ADDRESS_INVALID');
+  }
+  const octets = raw.split('.').map((part: string) => Number(part));
+  const first = octets[0];
+  const second = octets[1];
+  const third = octets[2];
+  if (octets.some((value: number) => value > 255) || first === 0 || first === 10 || first === 127 || first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) || (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && ((second === 0 && (third === 0 || third === 2)) || second === 168 || (second === 88 && third === 99))) ||
+    (first === 198 && (second === 18 || second === 19 || (second === 51 && third === 100))) ||
+    (first === 203 && second === 0 && third === 113)) {
+    throw new Error('SIGNAL_ADDRESS_INVALID');
+  }
+  return raw;
+}
+
 
 /** Keep device logs limited to fixed errors or canonical public server metadata. */
 export function isSafeDiagnosticRecord(record: string): boolean {
   if (typeof record !== 'string' || record.length > 300) return false;
+  if (/^UU_REA_CONTROL_RESULT\|-?[0-9]{1,5}$/.test(record)) return true;
+  if (/^UU_REA_RTC\|(SIGNAL_CONNECTED|CONTROL_OK|CONTROL_REJECTED|CONTROL_IDS_MISSING|OFFER_SENT|LOCAL_CANDIDATE|SOAC_ANSWER|SOAC_CANDIDATE|SOAC_OTHER|SOAC_ACK_OK|SOAC_ACK_REJECTED|PUSH_RECEIVED|SIGNAL_OTHER|NO_PEER|SCOPE_MISMATCH|ANSWER_EMPTY|ANSWER_APPLIED|APPLY_FAILED|ICE_CONNECTED|ICE_FAILED|VIDEO_TRACK|FIRST_FRAME|INPUT_SENT|INPUT_MOVE_SENT|INPUT_BUTTON_SENT|INPUT_KEY_SENT|CONTROL_DATA_RECEIVED|NATIVE_KEY_EVENT|INPUT_KEY_PRESS_SENT|INPUT_KEY_RELEASE_SENT)$/.test(record)) return true;
   if (record.length <= 120 && /^UU_REA_DIAG\|(INIT|SMS|LOGIN|DEVICES|JOIN|LEAVE)\|[A-Z_]{3,40}\|(?:[1-5][0-9]{2}|-)\|(?:[0-9]{1,6}|-)$/.test(record)) return true;
   const parts = record.split('|');
   if (parts.length !== 4 || parts[0] !== 'UU_REA_SIGNAL_ORIGIN' || parts[1] !== 'https') return false;

@@ -20,7 +20,16 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
     }
     protected write(packets: Packet[]): void {
       this.writable = false;
-      encodePayload(packets, payload => {
+      // UU expects a legacy Engine.IO message prefix inside each binary attachment.
+      // Adapted from the MIT signal adapter; API23 polling interoperability verified.
+      const framed = packets.map(packet => {
+        const data: unknown = packet.data;
+        const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : null;
+        if (packet.type !== 'message' || !bytes || bytes[0] === 4) return packet;
+        const prefixed = new Uint8Array(bytes.length + 1); prefixed[0] = 4; prefixed.set(bytes, 1);
+        return { ...packet, data: prefixed };
+      });
+      encodePayload(framed, payload => {
         if (this.stopped) return;
         void this.request('POST', payload).then(() => {
           if (this.stopped) return;

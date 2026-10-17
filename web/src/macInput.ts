@@ -1,5 +1,7 @@
 import { toAndroidKeyCodeFromDomEvent } from './upstream/androidKeyCodes';
 import { buildStreamerMacKeyboardInputMessage, buildStreamerMacMouseMoveAbsoluteInputMessage, buildStreamerMacMouseScrollInputMessage, buildStreamerMouseButtonInputMessage, buildStreamerTextInputMessage } from './upstream/streamerProtocol';
+type ModifierState = { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean };
+const MODIFIERS = [['Control', 'ctrlKey'], ['Shift', 'shiftKey'], ['Alt', 'altKey'], ['Meta', 'metaKey']] as const;
 export class MacInput {
   private buttons = new Set<number>();
   private keys = new Map<string, string | number>();
@@ -12,7 +14,20 @@ export class MacInput {
     this.send(buildStreamerMouseButtonInputMessage({ action: pressed ? 'mousePress' : 'mouseRelease', button }));
     if (pressed) this.buttons.add(button); else this.buttons.delete(button);
   }
-  key(event: { code: string; key: string }, pressed: boolean): void {
+  syncModifiers(event: ModifierState): void {
+    for (const [prefix, flag] of MODIFIERS) {
+      if (event[flag] !== false) continue;
+      for (const [code, value] of this.keys) {
+        if (!code.startsWith(prefix)) continue;
+        this.send(buildStreamerMacKeyboardInputMessage({ action: 'keyboardRelease', value }));
+        this.keys.delete(code);
+      }
+    }
+  }
+  key(event: { code: string; key: string } & ModifierState, pressed: boolean): void {
+    this.syncModifiers(event);
+    if (pressed && MODIFIERS.some(([prefix, flag]) => event.code.startsWith(prefix) && event[flag] === false)) return;
+    if (pressed && this.keys.has(event.code)) return;
     const value = this.keys.get(event.code) ?? toAndroidKeyCodeFromDomEvent(event);
     const message = buildStreamerMacKeyboardInputMessage({ action: pressed ? 'keyboardPress' : 'keyboardRelease', value });
     if (!message) return;

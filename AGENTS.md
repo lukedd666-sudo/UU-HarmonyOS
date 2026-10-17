@@ -19,7 +19,7 @@ UU_REA_LOGIN_STATE ← service uu-rea-login-state, account UU-REA
 UU_REA_PROTOCOL_SIGNING_MATERIAL ← service uu-rea-protocol-signing-material, account UU-REA
 ```
 
-鸿蒙端使用平台密钥库；首个开发版本允许登录态仅留在进程内存，退出清除。不得复用上游将登录Token存入localStorage或sessionStorage的实现。不得自动提取官方UU客户端的账户凭据、关闭TLS验证或向任意域名发送认证信息。
+鸿蒙端签名材料使用HUKS；登录Token及主控身份使用AssetStoreKit安全资产服务保存，启动恢复后向UU验证，退出清除，业务码1120使登录态失效。不得将登录Token存入普通文件、localStorage或sessionStorage。手机号、验证码及房间凭据不持久化。不得自动提取官方UU客户端的账户凭据、关闭TLS验证或向任意域名发送认证信息。
 
 ## 来源与协作
 

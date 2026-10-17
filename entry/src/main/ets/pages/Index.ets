@@ -8,6 +8,7 @@ import { isLocalEntry, isLocalResource, isSafeDiagnosticRecord } from '../bridge
 struct Index {
   private controller: webview.WebviewController = new webview.WebviewController();
   private bridge: NativeBridge = new NativeBridge(this.controller);
+  private nativeKeyObserved: boolean = false;
   @State status: string = '正在加载本地主控界面';
 
   aboutToAppear(): void {
@@ -35,6 +36,20 @@ struct Index {
       Web({ src: $rawfile('index.html'), controller: this.controller })
         .width('100%')
         .layoutWeight(1)
+        .focusable(true)
+        .focusOnTouch(true)
+        .onTouch((event) => {
+          if (event.type === TouchType.Down) {
+            try { this.controller.requestFocus(); } catch (_) {}
+          }
+        })
+        .onKeyEvent(() => {
+          if (!this.nativeKeyObserved) {
+            this.nativeKeyObserved = true;
+            hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', 'UU_REA_RTC|NATIVE_KEY_EVENT');
+          }
+          return false;
+        })
         .javaScriptAccess(true)
         .javaScriptProxy({ object: this.bridge, name: 'UUBridge', methodList: ['invoke'], controller: this.controller })
         .domStorageAccess(false)

@@ -10,7 +10,7 @@ const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/bridg
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }, fileName: 'NetworkPolicy.ts' }).outputText;
 const moduleState = { exports: {} };
 vm.runInNewContext(compiled, { exports: moduleState.exports, module: moduleState });
-const { validateEndpoint, validateHeaders, validateHttpRequest, validateWebSocketRequest, isPollingEndpoint, isLocalEntry, isLocalResource, isSafeDiagnosticRecord } = moduleState.exports;
+const { validateEndpoint, validateHeaders, validateHttpRequest, validateWebSocketRequest, isPollingEndpoint, isLocalEntry, isLocalResource, isSafeDiagnosticRecord, validateSignalAddress } = moduleState.exports;
 let cases = 0;
 for (const endpoint of [
   'https://api.nrd.nie.163.com/api/v1/login',
@@ -82,10 +82,21 @@ assert.equal(isLocalResource('resource://rawfile/../private'), false); cases++;
 assert.equal(isLocalResource('file:///data/private'), false); cases++;
 for (const record of [
   'UU_REA_DIAG|JOIN|SIGNAL_HOST_BLOCKED|200|0',
+  'UU_REA_RTC|FIRST_FRAME',
+  'UU_REA_RTC|INPUT_KEY_SENT',
+  'UU_REA_RTC|CONTROL_REJECTED',
+  'UU_REA_CONTROL_RESULT|0',
+  'UU_REA_CONTROL_RESULT|-99999',
   'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com|8443',
   'UU_REA_SIGNAL_ORIGIN|https|[2001:db8::1]|443',
 ]) { assert.equal(isSafeDiagnosticRecord(record), true); cases++; }
 for (const record of [
+  'UU_REA_RTC|INPUT_KEY_SENT|private-keystroke',
+  'UU_REA_CONTROL_RESULT|100000',
+  'UU_REA_CONTROL_RESULT|1|private-message',
+  'UU_REA_CONTROL_RESULT|1\nprivate-message',
+  'UU_REA_RTC|private-token',
+  'UU_REA_RTC|FIRST_FRAME\nprivate-token',
   'UU_REA_SIGNAL_ORIGIN|http|gateway.example.com|443',
   'UU_REA_SIGNAL_ORIGIN|https|user:private-password@gateway.example.com|443',
   'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com?token=private-token|443',
@@ -96,4 +107,13 @@ for (const record of [
   'UU_REA_SIGNAL_ORIGIN|https|gateway.example.com\nprivate-token|443',
   'UU_REA_SIGNAL_ORIGIN|https|' + 'a'.repeat(254) + '|443',
 ]) { assert.equal(isSafeDiagnosticRecord(record), false); cases++; }
+
+for (const address of ['', '42.186.225.118', '1.1.1.1', '8.8.8.8', '100.63.255.255', '100.128.0.1', '172.15.255.255', '172.32.0.1', '223.255.255.254']) {
+  assert.equal(validateSignalAddress(address), address); cases++;
+}
+for (const address of [undefined, null, [], ['42.186.225.118'], 42, ' 42.186.225.118', '42.186.225.118 ', '042.186.225.118', '42.186.225.0118', '42.186.225', '42.186.225.118:443', '42.186.225.118,8.8.8.8', 'https://42.186.225.118', '0x2a.bA.e1.76', '::1', '2001:4860:4860::8888', '256.1.1.1', '0.1.1.1', '10.0.0.1', '100.64.0.1', '100.127.255.255', '127.0.0.1', '169.254.1.1', '172.16.0.1', '172.31.255.255', '192.0.0.1', '192.0.2.1', '192.88.99.1', '192.168.0.1', '198.18.0.1', '198.19.255.255', '198.51.100.1', '203.0.113.1', '224.0.0.1', '239.255.255.255', '240.0.0.1', '255.255.255.255']) {
+  assert.throws(() => validateSignalAddress(address), /SIGNAL_ADDRESS_INVALID/); cases++;
+}
+assert.throws(() => validateHttpRequest('https://42.186.225.118/socket.io/?EIO=4&transport=polling', 'GET'), /HOST_BLOCKED/); cases++;
+
 console.log(`Native network policy: ${cases} checks passed (offline host execution).`);

@@ -22,7 +22,7 @@ it('runs real Engine.IO polling GET/POST and Socket.IO binary frames with auth h
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload); requests.push(request);
     if (request.method === 'GET') polls.push(id);
-    else if (request.body !== 'bAQID') host.__uuNativeResult?.(id, true, JSON.stringify({ status: 200, body: 'ok', headers: {} }));
+    else if (request.body !== 'bBAECAw==') host.__uuNativeResult?.(id, true, JSON.stringify({ status: 200, body: 'ok', headers: {} }));
   } } };
   let closed = false;
   const signal = new SignalClient(new NativeBridge(host), () => {}, () => { closed = true; });
@@ -42,7 +42,7 @@ it('runs real Engine.IO polling GET/POST and Socket.IO binary frames with auth h
   const pending = signal.sendSignalControl({ appControlId: 'control-fixture', appDataBase64: 'AQID' }).catch(error => error);
   await new Promise(resolve => setTimeout(resolve, 1));
   expect(requests.some(r => typeof r.body === 'string' && r.body.startsWith('451-0["control",'))).toBe(true);
-  expect(requests.some(r => typeof r.body === 'string' && r.body.split('\x1e').includes('bAQID'))).toBe(true);
+  expect(requests.some(r => typeof r.body === 'string' && r.body.split('\x1e').includes('bBAECAw=='))).toBe(true);
   expect(requests.every(r => r.op === 'http' && new URL(r.url as string).searchParams.get('transport') === 'polling')).toBe(true);
   expect(requests.every(r => (r.headers as Record<string, string>)['X-NRD-AUTH'] === 'fixture-token')).toBe(true);
   signal.close();
