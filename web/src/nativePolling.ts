@@ -53,8 +53,10 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
       } catch { this.fail(); }
     }
     private async request(method: 'GET' | 'POST', body?: string): Promise<{ status: number; body: string }> {
+      const started = Date.now();
       const url = pollingUrl(this.createUri('https', { ...this.query, t: `${Date.now()}-${Math.random().toString(36).slice(2)}` }));
       const response = await bridge.request<{ status: number; body: string }>({ op: 'http', method, url, headers: { ...authHeaders, ...(method === 'POST' ? { 'Content-Type': 'text/plain;charset=UTF-8' } : {}) }, ...(body === undefined ? {} : { body }) });
+      if (!this.stopped && Number.isInteger(response.status) && response.status >= 100 && response.status <= 599) console.info(`UU_REA_POLL|${method}|${response.status}|${Math.max(0, Date.now() - started)}`);
       if (response.status < 200 || response.status >= 300 || typeof response.body !== 'string') throw new Error('POLLING_FAILED');
       return response;
     }

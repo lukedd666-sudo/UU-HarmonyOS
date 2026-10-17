@@ -18,6 +18,7 @@ function load(name, imports = {}) {
 }
 const policy = load('NetworkPolicy');
 const state = { http: [], sockets: 0, destroyed: 0, deferred: null, response: 'offline response', dnsRules: new Map(), dnsCalls: [], dnsActive: 0, dnsMax: 0, addGate: null, removeGate: null, failAdd: false, failRemove: false };
+const diagnosticLogs = [];
 const http = {
   HttpDataType: { STRING: 0 },
   HttpProtocol: { HTTP1_1: 1 },
@@ -26,6 +27,7 @@ const http = {
       async request(endpoint, options) {
         state.http.push({ endpoint, options, client: this });
         if (state.deferred) await state.deferred;
+        if (state.httpError) throw state.httpError;
         return { responseCode: 200, result: state.response, header: { 'content-type': 'text/plain' } };
       },
       destroy() { state.destroyed++; this.destroyed = true; },
@@ -61,7 +63,7 @@ const { NativeBridge } = load('NativeBridge', {
   './NetworkPolicy': policy,
   './SigningMaterial': { signProtocolMessage: async () => { throw new Error('MATERIAL_MISSING'); } },
   './SessionStore': { sessionOperation: async () => { throw new Error('SESSION_LOAD_FAILED'); } },
-  '@kit.PerformanceAnalysisKit': { hilog: { info() {} } },
+  '@kit.PerformanceAnalysisKit': { hilog: { info(_domain, _tag, _format, record) { diagnosticLogs.push(record); } } },
   '@kit.NetworkKit': { connection, http, webSocket: { createWebSocket() { state.sockets++; throw new Error('UNEXPECTED_SOCKET_CREATION'); } } },
   '@kit.ArkTS': { util: { Base64Helper: class {} } },
 });
@@ -116,6 +118,14 @@ let checks = 0;
   state.response = 'x'.repeat(2097153);
   assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).body.code, 'RESPONSE_TOO_LARGE'); checks++;
   state.response = 'offline response';
+  state.httpError = { code: 2300028, message: 'private-url-and-body' };
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).ok, false); checks++;
+  assert.match(diagnosticLogs.at(-1), /^UU_REA_HTTP_ERROR\|GET\|2300028\|[0-9]+$/); checks++;
+  state.httpError = { code: 'private-code', message: 'private-url-and-body' };
+  await invoke({ op: 'http', url: endpoint, method: 'POST' });
+  assert.match(diagnosticLogs.at(-1), /^UU_REA_HTTP_ERROR\|POST\|-\|[0-9]+$/); checks++;
+  assert.equal(JSON.stringify(diagnosticLogs).includes('private'), false); checks++;
+  state.httpError = null;
   let release;
   state.deferred = new Promise(resolve => { release = resolve; });
   const resultCount = results.length;

@@ -29,6 +29,9 @@ export class SignalClient {
   private nextEvent = 0;
   private pending = new Set<(error: Error) => void>();
   private recorded = new Set<string>();
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastKeyRefresh: number | undefined;
+  private hasReconnectKey = false;
   private record(stage: string): void { if (!this.recorded.has(stage)) { this.recorded.add(stage); console.info(`UU_REA_RTC|${stage}`); } }
   constructor(private readonly bridge: NativeBridge, private readonly onEvent: (value: RemoteSignalGatewayEvent) => void, private readonly onClose: () => void) {}
   async connect(room: StreamerRoomConfig): Promise<void> {
@@ -43,14 +46,17 @@ export class SignalClient {
       }
       if (event === 'publisher_disconnect') this.close();
     });
-    socket.on('disconnect', () => {
+    socket.on('disconnect', reason => {
+      this.stopKeyRefresh();
+      const reasons: Record<string, string> = { 'ping timeout': 'PING_TIMEOUT', 'transport error': 'TRANSPORT_ERROR', 'transport close': 'TRANSPORT_CLOSE', 'io server disconnect': 'SERVER_DISCONNECT', 'io client disconnect': 'CLIENT_DISCONNECT', 'parse error': 'PARSE_ERROR' };
+      console.info(`UU_REA_SIGNAL_END|${Object.prototype.hasOwnProperty.call(reasons, reason) ? reasons[reason] : 'OTHER'}`);
       this.rejectPending();
       this.onClose();
     });
     await new Promise<void>((resolve, reject) => {
       const cancelled = (error: Error) => { cleanup(); reject(error); };
       const cleanup = () => { socket.off('connect', connected); socket.off('connect_error', failed); this.pending.delete(cancelled); };
-      const connected = () => { this.record('SIGNAL_CONNECTED'); cleanup(); resolve(); };
+      const connected = () => { this.record('SIGNAL_CONNECTED'); this.scheduleKeyRefresh(socket); cleanup(); resolve(); };
       const failed = () => { cleanup(); socket.disconnect(); reject(new ControllerError('SIGNAL_FAILED')); };
       socket.once('connect', connected);
       socket.once('connect_error', failed);
@@ -74,6 +80,8 @@ export class SignalClient {
     return { event: 'soac', payload: null, emittedAt: new Date().toISOString() };
   }
   close(): void {
+    this.stopKeyRefresh();
+    this.hasReconnectKey = false; this.lastKeyRefresh = undefined;
     this.rejectPending();
     const socket = this.socket;
     this.socket = null;
@@ -86,7 +94,29 @@ export class SignalClient {
   private rejectPending(): void {
     for (const reject of [...this.pending]) reject(new ControllerError('SOCKET_CLOSED'));
   }
-  private ack(event: string, payload: Record<string, unknown>): Promise<unknown[]> {
+  private stopKeyRefresh(): void { clearTimeout(this.refreshTimer); this.refreshTimer = undefined; }
+  private scheduleKeyRefresh(socket: Socket): void {
+    this.stopKeyRefresh();
+    this.refreshTimer = setTimeout(() => void this.refreshKey(socket), 30000);
+  }
+  private async refreshKey(socket: Socket): Promise<void> {
+    if (this.socket !== socket || !socket.connected) return;
+    // Official Mac streamer checks every 30s and refreshes at a 300s age.
+    // Keep only validity/age here; returned credentials are neither saved nor logged.
+    if (this.lastKeyRefresh === undefined || Date.now() - this.lastKeyRefresh >= 300000) {
+      try {
+        const result = await this.ack('refresh_reconnect_key');
+        if (this.socket !== socket || !socket.connected) return;
+        const key = asRecord(result[1]).reconnect_key;
+        if (result[0] === 'success' && (this.hasReconnectKey || (typeof key === 'string' && key.length > 0))) {
+          this.hasReconnectKey = true; this.lastKeyRefresh = Date.now();
+          console.info('UU_REA_RTC|KEY_REFRESH_OK');
+        } else console.info('UU_REA_RTC|KEY_REFRESH_REJECTED');
+      } catch { if (this.socket === socket && socket.connected) console.info('UU_REA_RTC|KEY_REFRESH_FAILED'); }
+    }
+    if (this.socket === socket && socket.connected) this.scheduleKeyRefresh(socket);
+  }
+  private ack(event: string, payload?: Record<string, unknown>): Promise<unknown[]> {
     if (!this.socket?.connected) return Promise.reject(new ControllerError('SOCKET_CLOSED'));
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -100,7 +130,7 @@ export class SignalClient {
       const fail = (error: Error) => finish(error);
       const timer = setTimeout(() => finish(new ControllerError('NATIVE_TIMEOUT')), 10000);
       this.pending.add(fail);
-      this.socket!.emit(event, payload, (...value: unknown[]) => finish(undefined, value));
+      this.socket!.emit(event, ...(payload === undefined ? [] : [payload]), (...value: unknown[]) => finish(undefined, value));
     });
   }
 }

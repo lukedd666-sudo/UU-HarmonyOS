@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { NativeBridge, type BridgeHost } from '../src/nativeBridge';
 import { SignalClient } from '../src/signalClient';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it('cancels an unfinished native signaling handshake without waiting for the network timeout', async () => {
   const host: BridgeHost = { UUBridge: { invoke() {} } };
@@ -70,6 +70,7 @@ it('ignores a late long-poll response after disconnect and never starts another 
 });
 
 it('rejects polling HTTP failure with a fixed safe error and no websocket fallback', async () => {
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {});
   const requests: Record<string, unknown>[] = [];
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     requests.push(JSON.parse(payload));
@@ -80,5 +81,84 @@ it('rejects polling HTTP failure with a fixed safe error and no websocket fallba
   expect(error.code).toBe('SIGNAL_FAILED');
   expect(error.message).not.toContain('sensitive');
   expect(requests.every(r => r.op === 'http')).toBe(true);
+  expect(log.mock.calls.some(([record]) => /^UU_REA_POLL\|GET\|403\|[0-9]+$/.test(record))).toBe(true);
+  expect(JSON.stringify(log.mock.calls)).not.toContain('sensitive');
   signal.close();
+  log.mockRestore();
+});
+
+it('distinguishes an established connection heartbeat timeout using a fixed reason only', async () => {
+  vi.useFakeTimers();
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+  const polls: string[] = [];
+  const host: BridgeHost = { UUBridge: { invoke(id, payload) {
+    const request = JSON.parse(payload);
+    if (request.method === 'GET') polls.push(id);
+    else host.__uuNativeResult?.(id, true, '{"status":200,"body":"ok"}');
+  } } };
+  const signal = new SignalClient(new NativeBridge(host), () => {}, () => {});
+  try {
+    const connecting = signal.connect({ token: 'private-fixture', signalServers: ['wss://signal.nrd.nie.163.com'] });
+    const respond = (body: string) => host.__uuNativeResult?.(polls.shift()!, true, JSON.stringify({ status: 200, body }));
+    respond('0{"sid":"private-session","upgrades":[],"pingInterval":1000,"pingTimeout":1000}');
+    await vi.advanceTimersByTimeAsync(0);
+    respond('40{"sid":"private-socket"}');
+    await connecting;
+    await vi.advanceTimersByTimeAsync(2001);
+    expect(log.mock.calls.some(([record]) => record === 'UU_REA_SIGNAL_END|PING_TIMEOUT')).toBe(true);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private');
+  } finally { signal.close(); log.mockRestore(); }
+});
+
+it('refreshes the current signaling session without payload or overlapping requests, and stops on close', async () => {
+  vi.useFakeTimers();
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+  let gets = 0;
+  let pendingGet: { id: string; timer: ReturnType<typeof setTimeout> } | undefined;
+  const refreshes: { id: string; at: number; wire: string }[] = [];
+  const host: BridgeHost = { UUBridge: { invoke(id, payload) {
+    const r = JSON.parse(payload);
+    const respond = (requestId: string, body: string) => host.__uuNativeResult?.(requestId, true, JSON.stringify({ status: 200, body }));
+    if (r.method === 'GET') {
+      gets++;
+      const body = gets === 1 ? '0{"sid":"fixture","upgrades":[],"pingInterval":15000,"pingTimeout":20000}' : gets === 2 ? '40{"sid":"fixture"}' : '2';
+      const timer = setTimeout(() => { pendingGet = undefined; respond(id, body); }, gets <= 2 ? 0 : 15000);
+      pendingGet = { id, timer };
+    } else {
+      respond(id, 'ok');
+      const m = /^42([0-9]+)\["refresh_reconnect_key"\]$/.exec(r.body);
+      if (m) refreshes.push({ id: m[1]!, at: Date.now(), wire: r.body });
+    }
+  } } };
+  const signal = new SignalClient(new NativeBridge(host), () => {}, () => {});
+  const acknowledge = (body: string) => {
+    const poll = pendingGet!; clearTimeout(poll.timer); pendingGet = undefined;
+    host.__uuNativeResult?.(poll.id, true, JSON.stringify({ status: 200, body }));
+  };
+  try {
+    const connecting = signal.connect({ token: 'private-token', signalServers: ['wss://signal.nrd.nie.163.com'] });
+    await vi.advanceTimersByTimeAsync(1); await connecting;
+    await vi.advanceTimersByTimeAsync(29999); expect(refreshes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1); expect(refreshes).toHaveLength(1);
+    const firstAt = refreshes[0]!.at;
+    acknowledge(`43${refreshes[0]!.id}["success",{"reconnect_key":"private-key"}]`);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log.mock.calls.some(([r]) => r === 'UU_REA_RTC|KEY_REFRESH_OK')).toBe(true);
+    await vi.advanceTimersByTimeAsync(299999); expect(refreshes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1); expect(refreshes).toHaveLength(2);
+    expect(refreshes[1]!.at - firstAt).toBe(300000);
+    // Withhold the second ACK: bounded timeout, no overlap, 30s before retry.
+    await vi.advanceTimersByTimeAsync(5000); expect(refreshes).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(log.mock.calls.some(([r]) => r === 'UU_REA_RTC|KEY_REFRESH_FAILED')).toBe(true);
+    await vi.advanceTimersByTimeAsync(30000); expect(refreshes).toHaveLength(3);
+    expect(refreshes[2]!.at - refreshes[1]!.at).toBe(40000);
+    signal.close();
+    const successLogs = log.mock.calls.filter(([r]) => r === 'UU_REA_RTC|KEY_REFRESH_OK').length;
+    acknowledge(`43${refreshes[2]!.id}["success",{"reconnect_key":"private-late-key"}]`);
+    await vi.advanceTimersByTimeAsync(400000);
+    expect(refreshes).toHaveLength(3);
+    expect(log.mock.calls.filter(([r]) => r === 'UU_REA_RTC|KEY_REFRESH_OK')).toHaveLength(successLogs);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private');
+  } finally { signal.close(); }
 });

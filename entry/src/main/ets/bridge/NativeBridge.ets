@@ -191,6 +191,7 @@ export class NativeBridge {
     const client = http.createHttp();
     this.requests.set(id, client);
     if (polling) this.pollingIds.add(id);
+    const started = Date.now();
     try {
       const options: http.HttpRequestOptions = {
         method: method as http.RequestMethod,
@@ -229,6 +230,13 @@ export class NativeBridge {
         }
       }
       return { status: response.responseCode, body: response.result, headers: responseHeaders };
+    } catch (error) {
+      if (polling && this.isCurrent(generation) && this.requests.get(id) === client) {
+        const number = (error as BusinessError).code;
+        const code = typeof number === 'number' && Number.isInteger(number) && Math.abs(number) <= 999999999 ? String(number) : '-';
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP_ERROR|${method}|${code}|${Math.max(0, Date.now() - started)}`);
+      }
+      throw error as Error;
     } finally {
       if (this.requests.get(id) === client) {
         client.destroy();

@@ -51,6 +51,7 @@ let roomDevice = '';
 let takeoverDevice = '';
 let signalQueue: Promise<void> = Promise.resolve();
 let smsUntil = 0;
+let mediaSample: ReturnType<typeof setInterval> | undefined;
 
 function status(message: string, error = false): void {
   if (api.persistenceWarning) {
@@ -117,6 +118,7 @@ async function refreshDevices(): Promise<void> {
   status(`已读取 ${devices.length} 台桌面设备，请选择 Mac。`);
 }
 function clearLocalSession(): void {
+  clearInterval(mediaSample); mediaSample = undefined;
   capture.checked = false;
   session?.close(); session = null;
   const previous = signal; signal = null; previous?.close();
@@ -251,6 +253,14 @@ window.addEventListener('blur', () => session?.releaseInputs());
 video.addEventListener('loadeddata', () => {
   if (!session || !video.videoWidth || video.readyState < 2) return;
   if (!session.markFrameReceived()) return;
+  clearInterval(mediaSample);
+  mediaSample = setInterval(() => {
+    if (!session || !video.srcObject) return;
+    // Aggregate playback counters only: no pixels, track identifiers or remote content.
+    const quality = video.getVideoPlaybackQuality();
+    const values = [Math.floor(video.currentTime * 1000), quality.totalVideoFrames, quality.droppedVideoFrames, video.videoWidth, video.videoHeight, video.readyState];
+    if (values.every(value => Number.isSafeInteger(value) && value >= 0)) console.info(`UU_REA_MEDIA|${values.join('|')}`);
+  }, 10000);
   element('empty-stage').hidden = true;
   status('已解码远端首帧；启用输入后可验证鼠标与键盘。'); update();
 });
