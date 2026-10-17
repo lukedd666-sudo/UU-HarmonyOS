@@ -59,6 +59,7 @@ export class RemoteSession {
       void peer.getStats().then(report => {
         if (this.closed || this.peer !== peer) return;
         const counters = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        const relayChecks = [0, 0, 0, 0, 0, 0];
         report.forEach(item => {
           if (item.type === 'local-candidate') {
             counters[5]!++;
@@ -66,6 +67,12 @@ export class RemoteSession {
           }
           if (item.type === 'remote-candidate') counters[6]!++;
           if (item.type !== 'candidate-pair') return;
+          const local = report.get(item.localCandidateId);
+          const relayIndex = local?.candidateType === 'relay' ? ['udp', 'tcp', 'tls'].indexOf(local.relayProtocol) : -1;
+          if (relayIndex >= 0) for (const [offset, field] of [[0, 'requestsSent'], [1, 'responsesReceived']] as const) {
+            const value: unknown = item[field];
+            if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) relayChecks[relayIndex * 2 + offset]! += value;
+          }
           counters[0]!++;
           for (const [index, field] of [[1, 'requestsSent'], [2, 'responsesReceived'], [3, 'bytesReceived'], [4, 'bytesSent'], [7, 'requestsReceived'], [8, 'responsesSent']] as const) {
             const value: unknown = item[field];
@@ -73,6 +80,15 @@ export class RemoteSession {
           }
         });
         if (counters.every(value => Number.isSafeInteger(value) && value >= 0)) console.info(`UU_REA_ICE_STATS|${counters.join('|')}`);
+        if (relayChecks.every(value => Number.isSafeInteger(value) && value >= 0)) console.info(`UU_REA_ICE_RELAY_CHECKS|${relayChecks.join('|')}`);
+        const kind = (value: unknown): string => typeof value === 'string' && ['host', 'srflx', 'prflx', 'relay'].includes(value) ? value.toUpperCase() : 'OTHER';
+        const protocol = (value: unknown): string => typeof value === 'string' && ['udp', 'tcp', 'tls'].includes(value) ? value.toUpperCase() : 'OTHER';
+        report.forEach(item => {
+          if (item.type !== 'transport' || typeof item.selectedCandidatePairId !== 'string') return;
+          const pair = report.get(item.selectedCandidatePairId);
+          const local = pair && report.get(pair.localCandidateId), remote = pair && report.get(pair.remoteCandidateId);
+          if (local?.type === 'local-candidate' && remote?.type === 'remote-candidate') console.info(`UU_REA_ICE_SELECTED|${kind(local.candidateType)}|${protocol(local.relayProtocol)}|${kind(remote.candidateType)}|${remote.protocol === 'udp' ? 'UDP' : remote.protocol === 'tcp' ? 'TCP' : 'OTHER'}`);
+        });
       }).catch(() => {});
     }, 15000);
     console.info(`UU_REA_ICE_CONFIG|${result.iceServers.length}|${peer.getConfiguration?.().iceTransportPolicy === 'relay' ? 'RELAY' : 'ALL'}`);
@@ -86,7 +102,7 @@ export class RemoteSession {
     peer.onicecandidateerror = event => {
       if (!this.closed && Number.isInteger(event.errorCode) && event.errorCode >= 0 && event.errorCode <= 999) {
         console.info(`UU_REA_ICE_ERROR|${event.errorCode}`);
-        const endpoint = event.url?.startsWith('turns:relay.nrd.nie.163.com:443') ? 'DOMAIN_TLS' : event.url?.startsWith('turns:') ? 'IP_TLS' : event.url?.startsWith('turn:') ? 'UDP_RELAY' : 'STUN';
+        const endpoint = event.url?.startsWith('turns:relay.nrd.nie.163.com:443') ? 'DOMAIN_TLS' : event.url?.startsWith('turns:') ? 'IP_TLS' : event.url?.startsWith('turn:') ? (event.url.endsWith('?transport=tcp') ? 'TCP_RELAY' : 'UDP_RELAY') : 'STUN';
         const reason = /tls|ssl|certificate/i.test(event.errorText) ? 'TLS' : /lookup|resolv|name resolution/i.test(event.errorText) ? 'DNS' : /timed? ?out|timeout/i.test(event.errorText) ? 'TIMEOUT' : 'OTHER';
         console.info(`UU_REA_ICE_FAILURE|${endpoint}|${reason}`);
       }

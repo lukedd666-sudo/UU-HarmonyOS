@@ -30,11 +30,13 @@ export function validateSignalAddress(raw?: string): string {
 export function isSafeDiagnosticRecord(record: string): boolean {
   if (typeof record !== 'string' || record.length > 300) return false;
   if (/^UU_REA_ICE_STATS(?:\|[0-9]{1,12}){12}$/.test(record)) return true;
+  if (/^UU_REA_ICE_RELAY_CHECKS(?:\|[0-9]{1,12}){6}$/.test(record)) return true;
+  if (/^UU_REA_ICE_SELECTED\|(HOST|SRFLX|PRFLX|RELAY|OTHER)\|(UDP|TCP|TLS|OTHER)\|(HOST|SRFLX|PRFLX|RELAY|OTHER)\|(UDP|TCP|OTHER)$/.test(record)) return true;
   if (/^UU_REA_SIGNAL_EVENT\|(SWITCH_NETWORK|DEVICE_CAPABILITY|STREAMER_PUSH|FORWARD_SETTING|PUBLISHER_DISCONNECT|LEAVE|LEFT)$/.test(record)) return true;
   if (/^UU_REA_ICE_CONFIG\|[0-9]{1,3}\|(ALL|RELAY)$/.test(record)) return true;
   if (/^UU_REA_ICE_STATE\|(NEW|CHECKING|CONNECTED|COMPLETED|DISCONNECTED|FAILED|CLOSED)$/.test(record)) return true;
   if (/^UU_REA_ICE_ERROR\|[0-9]{1,3}$/.test(record)) return true;
-  if (/^UU_REA_ICE_FAILURE\|(DOMAIN_TLS|IP_TLS|UDP_RELAY|STUN)\|(DNS|TLS|TIMEOUT|OTHER)$/.test(record)) return true;
+  if (/^UU_REA_ICE_FAILURE\|(DOMAIN_TLS|IP_TLS|UDP_RELAY|TCP_RELAY|STUN)\|(DNS|TLS|TIMEOUT|OTHER)$/.test(record)) return true;
   if (/^UU_REA_ICE_CANDIDATE\|(LOCAL|REMOTE)\|(HOST|SRFLX|PRFLX|RELAY|OTHER)\|(UDP|TCP|OTHER)$/.test(record)) return true;
   if (/^UU_REA_MEDIA\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,5}\|[0-9]{1,5}\|[0-4]$/.test(record)) return true;
   if (/^UU_REA_SIGNAL_END\|(PING_TIMEOUT|TRANSPORT_ERROR|TRANSPORT_CLOSE|SERVER_DISCONNECT|CLIENT_DISCONNECT|PARSE_ERROR|OTHER)$/.test(record)) return true;
