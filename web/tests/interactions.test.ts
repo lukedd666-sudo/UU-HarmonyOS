@@ -1,11 +1,11 @@
 import { expect, it } from 'vitest';
 import { ActionGate, runInputAction, videoPoint } from '../src/interactions';
-import { MacInput } from '../src/macInput';
+import { DesktopInput } from '../src/desktopInput';
 
 it('releases held keys after an input error and closes the session if release cannot be sent', () => {
   const sent: string[] = [];
   let failed = false, closed = false;
-  const input = new MacInput(value => { if (failed) throw new Error('channel failed'); sent.push(value); });
+  const input = new DesktopInput(value => { if (failed) throw new Error('channel failed'); sent.push(value); });
   input.key({ code: 'KeyA', key: 'a' }, true);
   failed = true;
   expect(runInputAction({ input, close: () => { closed = true; } }, () => input.move(1, 1, 10, 10))).toBe(false);

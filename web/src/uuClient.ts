@@ -6,6 +6,9 @@ import { normalizeStreamerRoomConfig } from './upstream/roomConfig';
 import type { LoginState, StreamerRoomConfig } from './upstream/types';
 
 export interface OwnedDevice { deviceId: string; name: string; mac: boolean; controllable: boolean; platform?: number }
+export function canConnectDesktop(device: OwnedDevice | undefined): device is OwnedDevice & { platform: 1 | 4 } {
+  return Boolean(device?.controllable && (device.platform === 1 || device.platform === 4));
+}
 function randomId(): string { return globalThis.crypto?.randomUUID?.() ?? `uu-rea-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
 

@@ -29,6 +29,13 @@ export function validateSignalAddress(raw?: string): string {
 /** Keep device logs limited to fixed errors or canonical public server metadata. */
 export function isSafeDiagnosticRecord(record: string): boolean {
   if (typeof record !== 'string' || record.length > 300) return false;
+  if (/^UU_REA_ICE_STATS(?:\|[0-9]{1,12}){12}$/.test(record)) return true;
+  if (/^UU_REA_SIGNAL_EVENT\|(SWITCH_NETWORK|DEVICE_CAPABILITY|STREAMER_PUSH|FORWARD_SETTING|PUBLISHER_DISCONNECT|LEAVE|LEFT)$/.test(record)) return true;
+  if (/^UU_REA_ICE_CONFIG\|[0-9]{1,3}\|(ALL|RELAY)$/.test(record)) return true;
+  if (/^UU_REA_ICE_STATE\|(NEW|CHECKING|CONNECTED|COMPLETED|DISCONNECTED|FAILED|CLOSED)$/.test(record)) return true;
+  if (/^UU_REA_ICE_ERROR\|[0-9]{1,3}$/.test(record)) return true;
+  if (/^UU_REA_ICE_FAILURE\|(DOMAIN_TLS|IP_TLS|UDP_RELAY|STUN)\|(DNS|TLS|TIMEOUT|OTHER)$/.test(record)) return true;
+  if (/^UU_REA_ICE_CANDIDATE\|(LOCAL|REMOTE)\|(HOST|SRFLX|PRFLX|RELAY|OTHER)\|(UDP|TCP|OTHER)$/.test(record)) return true;
   if (/^UU_REA_MEDIA\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,5}\|[0-9]{1,5}\|[0-4]$/.test(record)) return true;
   if (/^UU_REA_SIGNAL_END\|(PING_TIMEOUT|TRANSPORT_ERROR|TRANSPORT_CLOSE|SERVER_DISCONNECT|CLIENT_DISCONNECT|PARSE_ERROR|OTHER)$/.test(record)) return true;
   if (/^UU_REA_RTC\|KEY_REFRESH_(OK|REJECTED|FAILED)$/.test(record)) return true;
@@ -38,7 +45,7 @@ export function isSafeDiagnosticRecord(record: string): boolean {
   if (/^UU_REA_RTC\|(SIGNAL_CONNECTED|CONTROL_OK|CONTROL_REJECTED|CONTROL_IDS_MISSING|OFFER_SENT|LOCAL_CANDIDATE|SOAC_ANSWER|SOAC_CANDIDATE|SOAC_OTHER|SOAC_ACK_OK|SOAC_ACK_REJECTED|PUSH_RECEIVED|SIGNAL_OTHER|NO_PEER|SCOPE_MISMATCH|ANSWER_EMPTY|ANSWER_APPLIED|APPLY_FAILED|ICE_CONNECTED|ICE_FAILED|VIDEO_TRACK|FIRST_FRAME|INPUT_SENT|INPUT_MOVE_SENT|INPUT_BUTTON_SENT|INPUT_KEY_SENT|CONTROL_DATA_RECEIVED|NATIVE_KEY_EVENT|INPUT_KEY_PRESS_SENT|INPUT_KEY_RELEASE_SENT)$/.test(record)) return true;
   if (record.length <= 120 && /^UU_REA_DIAG\|(INIT|SMS|LOGIN|DEVICES|JOIN|LEAVE)\|[A-Z_]{3,40}\|(?:[1-5][0-9]{2}|-)\|(?:[0-9]{1,6}|-)$/.test(record)) return true;
   const parts = record.split('|');
-  if (parts.length !== 4 || parts[0] !== 'UU_REA_SIGNAL_ORIGIN' || parts[1] !== 'https') return false;
+  if (parts.length !== 4 || !((parts[0] === 'UU_REA_SIGNAL_ORIGIN' && parts[1] === 'https') || (parts[0] === 'UU_REA_ICE_ORIGIN' && ['STUN', 'TURN', 'TURNS'].includes(parts[1])))) return false;
   const host = parts[2];
   const dnsHost = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$/;
   if (host.length > 253 || !(dnsHost.test(host) || /^\[[0-9a-f:]+\]$/.test(host))) return false;

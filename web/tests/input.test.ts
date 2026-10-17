@@ -1,9 +1,29 @@
 import { expect, it } from 'vitest';
-import { MacInput } from '../src/macInput';
+import { DesktopInput } from '../src/desktopInput';
+
+it('uses Windows VK keys and releases stale and held modifiers for a Windows target', () => {
+  const messages: string[] = [];
+  const input = new DesktopInput(message => messages.push(message), 1);
+  input.move(100, 75, 200, 100);
+  input.key({ code: 'ControlLeft', key: 'Control', ctrlKey: true }, true);
+  input.key({ code: 'KeyA', key: 'a', ctrlKey: false }, true);
+  input.key({ code: 'KeyA', key: 'a', ctrlKey: false }, true);
+  input.key({ code: 'Backspace', key: 'Backspace' }, true);
+  input.releaseAll();
+  expect(messages.map(message => JSON.parse(message))).toEqual([
+    { action: 'mouse_move_absolute', abs_x: 0.5, abs_y: 0.75 },
+    { action: 'kbd_press', key: 162, interrept: true },
+    { action: 'kbd_release', key: 162, interrept: true },
+    { action: 'kbd_press', key: 65, interrept: true },
+    { action: 'kbd_press', key: 8, interrept: true },
+    { action: 'kbd_release', key: 65, interrept: true },
+    { action: 'kbd_release', key: 8, interrept: true },
+  ]);
+});
 
 it('releases a stale Command before ordinary typing or pointer input while preserving real shortcuts', () => {
   const messages: string[] = [];
-  const input = new MacInput(message => messages.push(message));
+  const input = new DesktopInput(message => messages.push(message));
   input.key({ code: 'MetaLeft', key: 'Meta', metaKey: true }, true);
   input.key({ code: 'Digit8', key: '8', metaKey: false }, true);
   input.key({ code: 'Digit8', key: '8', metaKey: false }, false);
@@ -22,7 +42,7 @@ it('releases a stale Command before ordinary typing or pointer input while prese
 
 it('accepts a first received repeat event, suppresses held duplicates and accepts the key again after release', () => {
   const messages: string[] = [];
-  const input = new MacInput(message => messages.push(message));
+  const input = new DesktopInput(message => messages.push(message));
   const event = { code: 'Digit8', key: '8', repeat: true };
   input.key(event, true);
   input.key(event, true);
@@ -37,7 +57,7 @@ it('accepts a first received repeat event, suppresses held duplicates and accept
 
 it('uses normalized desktop pointer coordinates and Mac key codes, releasing held inputs before close', () => {
   const messages: string[] = [];
-  const input = new MacInput(message => messages.push(message));
+  const input = new DesktopInput(message => messages.push(message));
   input.move(100, 75, 200, 100);
   input.button(2, true);
   input.key({ code: 'KeyA', key: 'a' }, true);

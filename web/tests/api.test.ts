@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ControllerError, NativeBridge, type BridgeHost } from '../src/nativeBridge';
-import { UuClient } from '../src/uuClient';
+import { UuClient, canConnectDesktop } from '../src/uuClient';
 import { SignalClient } from '../src/signalClient';
 import { controllerDiagnosticRecord, controllerErrorText } from '../src/errorText';
 beforeEach(() => { vi.spyOn(console, 'info').mockImplementation(() => {}); });
 afterEach(() => vi.restoreAllMocks());
+
+it('allows controllable Windows and Mac desktops while keeping unsupported or offline devices disabled', () => {
+  const device = { deviceId: 'fixture', name: 'fixture', mac: false, platform: 1, controllable: true };
+  expect(canConnectDesktop(device)).toBe(true);
+  expect(canConnectDesktop({ ...device, platform: 4, mac: true })).toBe(true);
+  expect(canConnectDesktop({ ...device, controllable: false })).toBe(false);
+  for (const platform of [undefined, 0, 2, 3, 5, NaN]) expect(canConnectDesktop({ ...device, platform })).toBe(false);
+  expect(canConnectDesktop(undefined)).toBe(false);
+});
 
 it('maps confirmed invalid verification code only for a login refusal, retaining safe metadata', () => {
   const explanation = '短信验证码无效，请重新获取并使用最新收到的验证码';
@@ -268,6 +277,7 @@ it('signs the exact JSON sent to native HTTP and keeps login state in memory unt
         : { code: 0, data: { desktop_devices: [
           { device_id: 'owned-mac', alias: 'Mac Studio', platform: 4, controllable: true },
           { deviceId: 'second-mac', deviceName: 'Office Mac', platform: '4', controllable: 'true' },
+          { device_id: 'owned-windows', alias: 'Windows PC', platform: 1, controllable: 1 },
         ] } };
       host.__uuNativeResult?.(id, true, JSON.stringify({ status: 200, body: JSON.stringify(body), headers: {} }));
     }
@@ -279,6 +289,7 @@ it('signs the exact JSON sent to native HTTP and keeps login state in memory unt
   expect(devices).toMatchObject([
     { deviceId: 'owned-mac', name: 'Mac Studio', mac: true },
     { deviceId: 'second-mac', name: 'Office Mac', mac: true, controllable: true },
+    { deviceId: 'owned-windows', name: 'Windows PC', mac: false, platform: 1, controllable: true },
   ]);
   const loginRequest = requests.find(r => String(r.url).endsWith('/login/by_mobile'))!;
   expect(loginRequest.body).toBe('{"country_code":"86","mobile":"13800138000","code":"123456"}');

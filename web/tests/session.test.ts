@@ -18,9 +18,10 @@ it('records only a bounded numeric rejection code without peer or server message
   } finally { log.mockRestore(); }
 });
 
-it('sends protocol Echo and the separate Mac input heartbeat without enabling unrelated capabilities', async () => {
+it.each([{ platform: 1 as const, iceNetworkType: 3 }, { platform: 4 as const, iceNetworkType: 2 }])('uses the desktop network policy for platform $platform while keeping protocol and input heartbeats', async ({ platform, iceNetworkType }) => {
   vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/H264' }] }) });
   const sent: Array<Uint8Array | string> = [];
+  const soac: unknown[] = [];
   const control = { readyState: 'open', onopen: null as (() => void) | null, send: (value: Uint8Array | string) => sent.push(value) };
   const peer = {
     connectionState: 'connected', signalingState: 'stable',
@@ -30,10 +31,11 @@ it('sends protocol Echo and the separate Mac input heartbeat without enabling un
   };
   const session = new RemoteSession({
     sendSignalControl: async () => ({ event: 'control', ack: [], control: { result: { clientId: 'fixture', iceServers: [] } }, emittedAt: '', ackReceivedAt: '' }),
-    sendSignalSoac: async () => ({ event: 'soac', payload: null, emittedAt: '' }),
-  }, () => peer as unknown as RTCPeerConnection, () => {}, () => {});
+    sendSignalSoac: async input => { soac.push(input); return { event: 'soac', payload: null, emittedAt: '' }; },
+  }, () => peer as unknown as RTCPeerConnection, () => {}, () => {}, platform);
   try {
     await session.start('fixture-controller');
+    expect(soac).toEqual([expect.objectContaining({ type: 'offer', iceNetworkType })]);
     control.onopen?.();
     const message = decodeStreamerControlMessage(sent[0] as Uint8Array);
     expect(message.simpleAction?.featureFlags).toEqual({});

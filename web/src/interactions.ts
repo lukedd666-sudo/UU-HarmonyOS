@@ -1,4 +1,4 @@
-import type { MacInput } from './macInput';
+import type { DesktopInput } from './desktopInput';
 export class ActionGate {
   busy = false;
   async run(action: () => Promise<void>): Promise<void> {
@@ -7,7 +7,7 @@ export class ActionGate {
     try { await action(); } finally { this.busy = false; }
   }
 }
-export function runInputAction(session: { input: MacInput; close(): void }, action: () => void): boolean {
+export function runInputAction(session: { input: DesktopInput; close(): void }, action: () => void): boolean {
   try { action(); return true; }
   catch { if (!session.input.releaseAll()) session.close(); return false; }
 }

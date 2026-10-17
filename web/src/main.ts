@@ -1,6 +1,6 @@
 import './style.css';
 import { ControllerError, NativeBridge, type BridgeHost } from './nativeBridge';
-import { UuClient, type OwnedDevice } from './uuClient';
+import { UuClient, canConnectDesktop, type OwnedDevice } from './uuClient';
 import { SignalClient } from './signalClient';
 import { RemoteSession } from './remoteSession';
 import { saveProtocolMaterial } from './material';
@@ -13,8 +13,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header><div class="wordmark">UU<span>—</span>REA</div><div class="header-meta">HARMONYOS · CONTROLLER <span class="badge">开发预览</span></div></header>
   <main>
     <aside>
-      <div class="section-kicker">01 / 本人设备</div><h1>把 Mac 桌面<br>带到鸿蒙电脑</h1>
-      <p class="intro">直接连接你自己的官方 UU Mac 客户端。登录态加密保存在鸿蒙安全存储，启动时恢复；房间凭据仅留在内存。</p>
+      <div class="section-kicker">01 / 本人设备</div><h1>把电脑桌面<br>带到鸿蒙电脑</h1>
+      <p class="intro">直接连接你自己的官方 UU Windows / Mac 客户端。登录态加密保存在鸿蒙安全存储，启动时恢复；房间凭据仅留在内存。</p>
       <form id="login-form" autocomplete="off">
         <label for="mobile">手机号</label><div class="phone-row"><input id="region" aria-label="国家区号" value="86" inputmode="numeric" maxlength="4" autocomplete="off"><input id="mobile" type="tel" inputmode="tel" placeholder="本人 UU 账号手机号" autocomplete="off" maxlength="20" required></div>
         <label for="code">短信验证码</label><div class="code-row"><input id="code" inputmode="numeric" autocomplete="off" placeholder="验证码" maxlength="10" required><button id="sms" type="button" class="secondary">获取验证码</button></div>
@@ -23,16 +23,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="row actions"><button id="init" class="secondary" type="button">初始化主控</button><button id="logout" class="text-button" type="button">退出并清除</button></div>
       <div class="divider"></div>
       <div class="section-title"><h2>我的桌面设备</h2><button id="refresh" type="button" class="text-button">刷新</button></div>
-      <select id="devices" aria-label="选择本人 Mac 设备"><option value="">登录后读取设备列表</option></select>
-      <button id="connect" type="button" class="primary wide">连接所选 Mac</button>
-      <button id="takeover" type="button" class="secondary wide" hidden>接管此 Mac</button>
-      <p id="takeover-warning" class="hint" hidden>接管会断开已有远控连接。仅在你确认后点击“接管此 Mac”。</p>
-      <p class="hint">Mac 端需登录同一账号、在线并允许远程控制。首版只支持单屏、鼠标与基础键盘。</p>
+      <select id="devices" aria-label="选择本人电脑设备"><option value="">登录后读取设备列表</option></select>
+      <button id="connect" type="button" class="primary wide">连接所选电脑</button>
+      <button id="takeover" type="button" class="secondary wide" hidden>接管此电脑</button>
+      <p id="takeover-warning" class="hint" hidden>接管会断开已有远控连接。仅在你确认后点击“接管此电脑”。</p>
+      <p class="hint">被控电脑需登录同一账号、在线并允许远程控制。首版只支持单屏、鼠标与基础键盘。</p>
       <details class="material"><summary>本机协议材料设置</summary><p class="hint">材料仅导入本机平台密钥库，用于原生请求签名。页面不保留材料，也不发送网络请求。</p><form id="material-form" autocomplete="off"><label for="material">协议签名材料</label><input id="material" type="password" autocomplete="off" spellcheck="false" placeholder="仅在本机输入合法获得的材料"><button id="save-material" type="submit" class="secondary wide">保存/替换至本机密钥库</button></form><p id="material-status" class="hint" aria-live="polite"></p></details>
     </aside>
     <section class="workspace">
       <div class="workspace-top"><div><div class="section-kicker">02 / 远程桌面</div><h2 id="target-name">尚未选择设备</h2></div><button id="disconnect" type="button" class="secondary">断开连接</button></div>
-      <div id="input-surface" class="stage" tabindex="0" role="application" aria-label="远程桌面控制区域"><video id="desktop" autoplay playsinline muted aria-label="远程 Mac 桌面，启用输入后点击此处使用鼠标和键盘"></video><div id="empty-stage"><div class="screen-mark">↗</div><h3>等待连接你的 Mac</h3><p>连接成功后，实时画面将在这里显示。</p><span>STANDARD WEBRTC / H.264</span></div></div>
+      <div id="input-surface" class="stage" tabindex="0" role="application" aria-label="远程桌面控制区域"><video id="desktop" autoplay playsinline muted aria-label="远程电脑桌面，启用输入后点击此处使用鼠标和键盘"></video><div id="empty-stage"><div class="screen-mark">↗</div><h3>等待连接你的电脑</h3><p>连接成功后，实时画面将在这里显示。</p><span>STANDARD WEBRTC / H.264</span></div></div>
       <div class="workspace-bottom"><label class="input-toggle"><input type="checkbox" id="capture">启用鼠标与键盘</label><span>点击画面获取键盘焦点 · 失焦自动释放按键</span></div>
       <div class="status-panel"><div class="status-indicator"></div><div><strong id="status" role="status" aria-live="polite">就绪</strong><p id="capabilities"></p></div></div>
       <p class="footnote">UU 互通待验证。SDP 协商、视频轨道、实际首帧与输入验收分别记录。</p>
@@ -109,13 +109,13 @@ async function refreshDevices(): Promise<void> {
   takeoverDevice = '';
   devices = await api.devices();
   const select = element<HTMLSelectElement>('devices');
-  select.replaceChildren(new Option('请选择在线的本人 Mac', ''));
+  select.replaceChildren(new Option('请选择在线的本人电脑', ''));
   for (const device of devices) {
-    const option = new Option(`${device.name} · ${device.mac ? 'Mac' : '其他平台'}${device.controllable ? '' : ' · 当前不可控制'}`, device.deviceId);
-    option.disabled = !device.mac || !device.controllable;
+    const option = new Option(`${device.name} · ${device.platform === 1 ? 'Windows' : device.mac ? 'Mac' : '暂不支持的平台'}${device.controllable ? '' : ' · 当前不可控制'}`, device.deviceId);
+    option.disabled = !canConnectDesktop(device);
     select.add(option);
   }
-  status(`已读取 ${devices.length} 台桌面设备，请选择 Mac。`);
+  status(`已读取 ${devices.length} 台桌面设备，请选择电脑。`);
 }
 function clearLocalSession(): void {
   clearInterval(mediaSample); mediaSample = undefined;
@@ -165,10 +165,10 @@ element('devices').addEventListener('change', () => {
 async function connectSelected(forceJoin = false): Promise<void> {
   if (!globalThis.RTCPeerConnection) throw new ControllerError('WEBRTC_UNSUPPORTED');
   const selected = devices.find(device => device.deviceId === element<HTMLSelectElement>('devices').value);
-  if (!selected?.mac || !selected.controllable) throw new ControllerError('API_FORMAT');
+  if (!canConnectDesktop(selected)) throw new ControllerError('API_FORMAT');
   if (forceJoin && (takeoverDevice !== selected.deviceId || api.pendingRoomDeviceId || session)) return;
   takeoverDevice = '';
-  status('正在加入本人 Mac 的 UU 房间');
+  status('正在加入本人电脑的 UU 房间');
   let room;
   try { room = await api.join(selected.deviceId, forceJoin); }
   catch (error) {
@@ -188,8 +188,8 @@ async function connectSelected(forceJoin = false): Promise<void> {
     if (signal !== connection) return;
     const current = new RemoteSession(connection, configuration => new RTCPeerConnection(configuration), stream => {
       video.srcObject = stream;
-      void video.play().catch(() => status('已收到视频，请点击画面启动播放。'));
-    }, state => { status(state); update(); });
+      void video.play().catch(() => { if (session && video.srcObject === stream && stream.active) status('已收到视频，请点击画面启动播放。'); });
+    }, state => { status(state); update(); }, selected.platform);
     session = current;
     await current.start(api.controllerDeviceId);
   } catch (error) {
@@ -240,7 +240,7 @@ video.addEventListener('pointerup', event => { if ([0, 2].includes(event.button)
 video.addEventListener('contextmenu', event => { if (capture.checked) event.preventDefault(); });
 video.addEventListener('wheel', event => { if (capture.checked) { event.preventDefault(); withInput(current => current.input.scroll(event.deltaX, event.deltaY)); } }, { passive: false });
 // The first event after acquiring focus may already carry repeat=true. Track
-// held keys in MacInput so that event is not lost and duplicates stay suppressed.
+// held keys in DesktopInput so that event is not lost and duplicates stay suppressed.
 inputSurface.addEventListener('keydown', event => { if (capture.checked) { event.preventDefault(); withInput(current => current.input.key(event, true)); } });
 inputSurface.addEventListener('keyup', event => { if (capture.checked) { event.preventDefault(); withInput(current => current.input.key(event, false)); } });
 inputSurface.addEventListener('blur', () => session?.releaseInputs());
@@ -275,6 +275,6 @@ if (bridge.available) void run(async () => {
   status('正在从鸿蒙安全存储恢复登录态');
   if (await api.restore()) {
     await refreshDevices();
-    status(`登录态已恢复并验证，已读取 ${devices.length} 台桌面设备，请选择 Mac。`);
+    status(`登录态已恢复并验证，已读取 ${devices.length} 台桌面设备，请选择电脑。`);
   } else status('尚无保存的登录态，请使用本人账号登录。');
 });

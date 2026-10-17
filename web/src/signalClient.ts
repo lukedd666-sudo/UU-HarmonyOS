@@ -40,6 +40,8 @@ export class SignalClient {
     const socket = io(server, { autoConnect: false, forceNew: true, reconnection: false, upgrade: false, rememberUpgrade: false, timeout: Math.min(room.timeout || 15000, 30000), transports: [nativePollingTransport(this.bridge, headers)] });
     this.socket = socket;
     socket.onAny((event, ...payload: unknown[]) => {
+      const kinds: Record<string, string> = { switch_network_notify: 'SWITCH_NETWORK', device_capability: 'DEVICE_CAPABILITY', streamer_push: 'STREAMER_PUSH', forward_setting: 'FORWARD_SETTING', publisher_disconnect: 'PUBLISHER_DISCONNECT', leave: 'LEAVE', left: 'LEFT' };
+      if (Object.prototype.hasOwnProperty.call(kinds, event)) console.info(`UU_REA_SIGNAL_EVENT|${kinds[event]}`);
       this.record(event === 'bmsg_push' ? 'PUSH_RECEIVED' : ['soac', 'answer', 'candidate', 'restart_ice'].includes(event) ? 'SOAC_OTHER' : 'SIGNAL_OTHER');
       for (const normalized of normalizeSignalGatewayInboundEvents(event, payload, binary)) {
         this.onEvent({ id: ++this.nextEvent, direction: 'inbound', event: normalized.event, payload: normalized.payload, receivedAt: new Date().toISOString() });

@@ -1,15 +1,15 @@
 // Minimal H.264/SCTP session adapted from MIT browserRemoteSession.ts. No diagnostic payload log.
 import { ControllerError, asRecord } from './nativeBridge';
-import { MacInput } from './macInput';
+import { DesktopInput } from './desktopInput';
 import { toBase64 } from './nativeSocket';
-import { buildDefaultStreamerDecoderCap, buildStreamerControlStreamerDataJson, buildStreamerRtcConfiguration, decodeStreamerControlMessage, encodeStreamerConnectOptions, encodeStreamerEchoRequestMessage, encodeStreamerEchoResponseMessage, getStreamerSignalControlFailure, STREAMER_DATA_CHANNEL_LABELS, STREAMER_SIMPLE_ACTION_TYPES } from './upstream/streamerProtocol';
+import { buildDefaultStreamerDecoderCap, buildStreamerControlStreamerDataJson, buildStreamerRtcConfiguration, decodeStreamerControlMessage, encodeStreamerConnectOptions, encodeStreamerEchoRequestMessage, encodeStreamerEchoResponseMessage, getStreamerSignalControlFailure, STREAMER_DATA_CHANNEL_LABELS, STREAMER_FPS_VALUES, STREAMER_SIMPLE_ACTION_TYPES } from './upstream/streamerProtocol';
 import type { RemoteSignalControlRequest, RemoteSignalControlResult, RemoteSignalGatewayEvent, RemoteSignalSoacRequest, RemoteSignalSoacResult } from './upstream/types';
 export interface SessionSignal {
   sendSignalControl(input: RemoteSignalControlRequest): Promise<RemoteSignalControlResult>;
   sendSignalSoac(input: RemoteSignalSoacRequest): Promise<RemoteSignalSoacResult>;
 }
 export class RemoteSession {
-  readonly input = new MacInput(message => this.sendInput(message));
+  readonly input: DesktopInput;
   private peer: RTCPeerConnection | null = null;
   private control: RTCDataChannel | null = null;
   private closed = false;
@@ -17,13 +17,16 @@ export class RemoteSession {
   private clientId: string | undefined;
   private iceId: string | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
+  private statsTimer: ReturnType<typeof setTimeout> | undefined;
   private sequence = 1;
   private queuedCandidates: RTCIceCandidateInit[] = [];
   private media: MediaStream | null = null;
   private frameReceived = false;
   private recorded = new Set<string>();
   private record(stage: string): void { if (!this.recorded.has(stage)) { this.recorded.add(stage); console.info(`UU_REA_RTC|${stage}`); } }
-  constructor(private readonly signal: SessionSignal, private readonly createPeer: (configuration: RTCConfiguration) => RTCPeerConnection, private readonly onStream: (stream: MediaStream) => void, private readonly onState: (state: string) => void) {}
+  constructor(private readonly signal: SessionSignal, private readonly createPeer: (configuration: RTCConfiguration) => RTCPeerConnection, private readonly onStream: (stream: MediaStream) => void, private readonly onState: (state: string) => void, private readonly platform: 1 | 4 = 4) {
+    this.input = new DesktopInput(message => this.sendInput(message), platform);
+  }
   get inputReady(): boolean { return !this.closed && this.frameReceived && this.peer?.connectionState === 'connected' && this.control?.readyState === 'open'; }
   markFrameReceived(): boolean { if (this.closed || !this.media) return false; this.frameReceived = true; this.record('FIRST_FRAME'); return true; }
   releaseInputs(): void {
@@ -34,7 +37,7 @@ export class RemoteSession {
     this.onState('请求控制权限');
     const appData = encodeStreamerConnectOptions({
       deviceId, typeValue: -1,
-      captureParams: { fps: 30, cursorCapture: true, localResolution: { width: 1920, height: 1080 } },
+      captureParams: { fps: STREAMER_FPS_VALUES.FPS_30, cursorCapture: true, localResolution: { width: 1920, height: 1080 } },
       decoderCapList: [buildDefaultStreamerDecoderCap()],
       featureFlags: { ff_capture_setting: 2, ff_simple_action: 1 },
     });
@@ -52,6 +55,42 @@ export class RemoteSession {
     this.iceId = result.iceId;
     const peer = this.createPeer(buildStreamerRtcConfiguration(result));
     this.peer = peer;
+    this.statsTimer = setTimeout(() => {
+      void peer.getStats().then(report => {
+        if (this.closed || this.peer !== peer) return;
+        const counters = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        report.forEach(item => {
+          if (item.type === 'local-candidate') {
+            counters[5]!++;
+            if (item.candidateType === 'relay' && ['udp', 'tcp', 'tls'].includes(item.relayProtocol)) counters[item.relayProtocol === 'udp' ? 9 : item.relayProtocol === 'tcp' ? 10 : 11]!++;
+          }
+          if (item.type === 'remote-candidate') counters[6]!++;
+          if (item.type !== 'candidate-pair') return;
+          counters[0]!++;
+          for (const [index, field] of [[1, 'requestsSent'], [2, 'responsesReceived'], [3, 'bytesReceived'], [4, 'bytesSent'], [7, 'requestsReceived'], [8, 'responsesSent']] as const) {
+            const value: unknown = item[field];
+            if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) counters[index]! += value;
+          }
+        });
+        if (counters.every(value => Number.isSafeInteger(value) && value >= 0)) console.info(`UU_REA_ICE_STATS|${counters.join('|')}`);
+      }).catch(() => {});
+    }, 15000);
+    console.info(`UU_REA_ICE_CONFIG|${result.iceServers.length}|${peer.getConfiguration?.().iceTransportPolicy === 'relay' ? 'RELAY' : 'ALL'}`);
+    for (const server of result.iceServers) for (const url of Array.isArray(server.urls) ? server.urls : [server.urls]) {
+      const origin = /^(stun|turn|turns):(?:\/\/)?(\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::([0-9]{1,5}))?(?:\?transport=(?:udp|tcp))?$/i.exec(url);
+      if (origin) console.info(`UU_REA_ICE_ORIGIN|${origin[1]!.toUpperCase()}|${origin[2]!.toLowerCase()}|${origin[3] ?? (origin[1]!.toLowerCase() === 'turns' ? 5349 : 3478)}`);
+    }
+    peer.oniceconnectionstatechange = () => {
+      if (!this.closed && ['new', 'checking', 'connected', 'completed', 'disconnected', 'failed', 'closed'].includes(peer.iceConnectionState)) console.info(`UU_REA_ICE_STATE|${peer.iceConnectionState.toUpperCase()}`);
+    };
+    peer.onicecandidateerror = event => {
+      if (!this.closed && Number.isInteger(event.errorCode) && event.errorCode >= 0 && event.errorCode <= 999) {
+        console.info(`UU_REA_ICE_ERROR|${event.errorCode}`);
+        const endpoint = event.url?.startsWith('turns:relay.nrd.nie.163.com:443') ? 'DOMAIN_TLS' : event.url?.startsWith('turns:') ? 'IP_TLS' : event.url?.startsWith('turn:') ? 'UDP_RELAY' : 'STUN';
+        const reason = /tls|ssl|certificate/i.test(event.errorText) ? 'TLS' : /lookup|resolv|name resolution/i.test(event.errorText) ? 'DNS' : /timed? ?out|timeout/i.test(event.errorText) ? 'TIMEOUT' : 'OTHER';
+        console.info(`UU_REA_ICE_FAILURE|${endpoint}|${reason}`);
+      }
+    };
     for (const label of Object.values(STREAMER_DATA_CHANNEL_LABELS)) {
       const channel = peer.createDataChannel(label);
       channel.binaryType = 'arraybuffer';
@@ -87,6 +126,7 @@ export class RemoteSession {
       if (!event.candidate || this.closed) return;
       this.record('LOCAL_CANDIDATE');
       const candidate = event.candidate.toJSON();
+      this.recordCandidate('LOCAL', candidate.candidate ?? '');
       void this.sendSoac({ type: 'candidate', candidate: { candidate: candidate.candidate ?? '', sdpMid: candidate.sdpMid ?? undefined, sdpMLineIndex: candidate.sdpMLineIndex ?? undefined } }).catch(() => { if (!this.closed) this.onState('ICE 候选发送失败'); });
     };
     peer.ontrack = event => {
@@ -105,7 +145,8 @@ export class RemoteSession {
     if (this.closed) return;
     await peer.setLocalDescription(offer);
     if (this.closed) return;
-    await this.sendSoac({ type: 'offer', sdp: offer.sdp, gzipSdp: false, iceNetworkType: 2 });
+    // Windows uses the fixed MIT reference's appAuto mode (3); retain the accepted Mac route.
+    await this.sendSoac({ type: 'offer', sdp: offer.sdp, gzipSdp: false, iceNetworkType: this.platform === 1 ? 3 : 2 });
     this.record('OFFER_SENT');
     if (!this.closed) this.onState('已发送 H.264 SDP，等待被控端');
   }
@@ -126,12 +167,14 @@ export class RemoteSession {
       } else if (data.type === 'candidate') {
         const candidate = asRecord(data.candidate);
         if (typeof candidate.candidate !== 'string') continue;
+        this.recordCandidate('REMOTE', candidate.candidate);
         const init: RTCIceCandidateInit = { candidate: candidate.candidate, sdpMid: typeof candidate.sdpMid === 'string' ? candidate.sdpMid : null, sdpMLineIndex: typeof candidate.sdpMLineIndex === 'number' ? candidate.sdpMLineIndex : null };
         if (this.peer.remoteDescription) await this.peer.addIceCandidate(init); else this.queuedCandidates.push(init);
       }
     }
   }
   close(): void {
+    clearTimeout(this.statsTimer); this.statsTimer = undefined;
     this.input.releaseAll();
     this.closed = true;
     this.frameReceived = false;
@@ -154,6 +197,11 @@ export class RemoteSession {
     else if (action === 'kbd_press' || action === 'kbd_release') { this.record('INPUT_KEY_SENT'); this.record(action === 'kbd_press' ? 'INPUT_KEY_PRESS_SENT' : 'INPUT_KEY_RELEASE_SENT'); }
   }
   private timestamp(): number { return Math.floor(Date.now() / 1000); }
+  private recordCandidate(direction: 'LOCAL' | 'REMOTE', value: string): void {
+    const protocol = /^candidate:\S+\s+[0-9]+\s+(udp|tcp)\s/i.exec(value)?.[1]?.toUpperCase() ?? 'OTHER';
+    const kind = /\styp\s+(host|srflx|prflx|relay)(?:\s|$)/i.exec(value)?.[1]?.toUpperCase() ?? 'OTHER';
+    console.info(`UU_REA_ICE_CANDIDATE|${direction}|${kind}|${protocol}`);
+  }
   private sendHeartbeat(): void {
     if (this.closed || this.control?.readyState !== 'open') return;
     try {
