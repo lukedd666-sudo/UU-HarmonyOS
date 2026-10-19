@@ -62,6 +62,7 @@ export class NativeBridge {
   private generation: number = 0;
   private requests: Map<string, http.HttpRequest> = new Map();
   private pollingIds: Set<string> = new Set();
+  private pollingSequence: number = 0;
   private routeQueue: Promise<void> = Promise.resolve();
   private routeAddress: string = '';
   private routeDirty: boolean = false;
@@ -192,6 +193,7 @@ export class NativeBridge {
     this.requests.set(id, client);
     if (polling) this.pollingIds.add(id);
     const started = Date.now();
+    const sequence = polling ? ++this.pollingSequence : 0;
     try {
       const options: http.HttpRequestOptions = {
         method: method as http.RequestMethod,
@@ -213,6 +215,19 @@ export class NativeBridge {
       if (request.body !== undefined && request.body.length > 0) {
         options.extraData = request.body;
       }
+      if (polling) {
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|${method}|START|0|-`);
+        try {
+          // The event payload may contain credentials. Observe arrival only.
+          client.on('headersReceive', () => {
+            if (this.isCurrent(generation) && this.requests.get(id) === client) {
+              hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|${method}|HEADERS|${Math.max(0, Date.now() - started)}|-`);
+            }
+          });
+        } catch (_) {
+          // Diagnostics must not prevent a request on a runtime without this observer.
+        }
+      }
       const response = await client.request(endpoint, options);
       if (polling && this.requests.get(id) !== client) {
         throw new Error('SIGNAL_ROUTE_FAILED');
@@ -229,11 +244,26 @@ export class NativeBridge {
           responseHeaders[name] = value;
         }
       }
+      if (polling && this.isCurrent(generation) && this.requests.get(id) === client) {
+        const status = this.diagnosticNumber(response.responseCode);
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|${method}|SUCCESS|${Math.max(0, Date.now() - started)}|${status}`);
+        const timing = response.performanceTiming;
+        if (timing !== undefined && timing !== null) {
+          // SDK timings are cumulative milliseconds from request start, not phase durations.
+          hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP_TIMING_CUM_MS|${sequence}|${method}|dns=${this.diagnosticNumber(timing.dnsTiming)}|tcp=${this.diagnosticNumber(timing.tcpTiming)}|tls=${this.diagnosticNumber(timing.tlsTiming)}|firstSend=${this.diagnosticNumber(timing.firstSendTiming)}|firstReceive=${this.diagnosticNumber(timing.firstReceiveTiming)}|finish=${this.diagnosticNumber(timing.totalFinishTiming)}|redirect=${this.diagnosticNumber(timing.redirectTiming)}|headers=${this.diagnosticNumber(timing.responseHeaderTiming)}|body=${this.diagnosticNumber(timing.responseBodyTiming)}|total=${this.diagnosticNumber(timing.totalTiming)}`);
+        }
+        // API 24 adds this optional response property; API 23 may omit it.
+        const extra = response.connectionExtraInfo;
+        if (extra !== undefined && extra !== null) {
+          hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP_CONNECTION|${sequence}|${method}|reuse=${this.diagnosticBoolean(extra.isReusedConnection)}|proxy=${this.diagnosticBoolean(extra.isProxyConnection)}|cache=${this.diagnosticBoolean(extra.isCacheHit)}`);
+        }
+      }
       return { status: response.responseCode, body: response.result, headers: responseHeaders };
     } catch (error) {
       if (polling && this.isCurrent(generation) && this.requests.get(id) === client) {
         const number = (error as BusinessError).code;
         const code = typeof number === 'number' && Number.isInteger(number) && Math.abs(number) <= 999999999 ? String(number) : '-';
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|${method}|ERROR|${Math.max(0, Date.now() - started)}|${code}`);
         hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP_ERROR|${method}|${code}|${Math.max(0, Date.now() - started)}`);
       }
       throw error as Error;
@@ -244,6 +274,14 @@ export class NativeBridge {
         this.pollingIds.delete(id);
       }
     }
+  }
+
+  private diagnosticNumber(value: number): string {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 999999999 ? String(Math.floor(value)) : '-';
+  }
+
+  private diagnosticBoolean(value: boolean): string {
+    return typeof value === 'boolean' ? (value ? '1' : '0') : '-';
   }
 
   private cancelPolling(): void {

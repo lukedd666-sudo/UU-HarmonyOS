@@ -24,11 +24,18 @@ const http = {
   HttpProtocol: { HTTP1_1: 1 },
   createHttp() {
     return {
+      on(event, callback) {
+        assert.equal(event, 'headersReceive');
+        if (state.failHeadersObserver) throw new Error('private-observer-error');
+        this.headersCallback = callback;
+      },
       async request(endpoint, options) {
         state.http.push({ endpoint, options, client: this });
+        const failure = state.httpError;
         if (state.deferred) await state.deferred;
-        if (state.httpError) throw state.httpError;
-        return { responseCode: 200, result: state.response, header: { 'content-type': 'text/plain' } };
+        this.headersCallback?.({ authorization: 'private-header', get poisoned() { throw new Error('MUST_NOT_READ_HEADERS_EVENT'); } });
+        if (failure) throw failure;
+        return { responseCode: 200, result: state.response, header: { 'content-type': 'text/plain' }, performanceTiming: state.timing, connectionExtraInfo: state.connectionInfo };
       },
       destroy() { state.destroyed++; this.destroyed = true; },
     };
@@ -97,7 +104,11 @@ let checks = 0;
   }
   assert.equal(state.sockets, 0); checks++;
   const endpoint = 'https://signal.nrd.nie.163.com/socket.io/?EIO=4&transport=polling';
+  state.timing = { dnsTiming: 1.8, tcpTiming: 8, tlsTiming: 12, firstSendTiming: 13, firstReceiveTiming: 25, totalFinishTiming: 27, redirectTiming: 0, responseHeaderTiming: 26, responseBodyTiming: 28, totalTiming: 29 };
+  state.connectionInfo = { networkProtocolName: 'private-protocol', localAddress: 'private-address', remoteAddress: 'private-address', localPort: 1, remotePort: 2, isReusedConnection: false, isProxyConnection: true, isCacheHit: false, redirectCount: 0 };
+  let previousSequence = 0;
   for (const method of ['GET', 'POST']) {
+    const logStart = diagnosticLogs.length;
     const result = await invoke({ op: 'http', url: endpoint, method, headers: { 'X-NRD-AUTH': 'offline-fixture' }, body: method === 'POST' ? 'offline-fixture-packet' : undefined });
     assert.equal(result.ok, true); assert.equal(result.body.status, 200); checks++;
     const request = state.http.at(-1);
@@ -107,8 +118,29 @@ let checks = 0;
     assert.equal(request.options.usingCache, false); assert.equal(request.options.remoteValidation, 'system'); checks++;
     assert.equal(request.options.usingProtocol, http.HttpProtocol.HTTP1_1);
     assert.equal(request.options.header.Connection, 'close'); checks++;
+    const logs = diagnosticLogs.slice(logStart);
+    const starts = logs.filter(log => /^UU_REA_HTTP\|[0-9]+\|(?:GET|POST)\|START\|0\|-$/.test(log));
+    assert.equal(starts.length, 1, 'each polling request needs a safe numbered START');
+    const sequence = Number(starts[0].split('|')[1]);
+    assert(sequence > previousSequence); previousSequence = sequence;
+    assert(logs.some(log => new RegExp(`^UU_REA_HTTP\\|${sequence}\\|${method}\\|HEADERS\\|[0-9]+\\|-$`).test(log)));
+    assert(logs.some(log => new RegExp(`^UU_REA_HTTP\\|${sequence}\\|${method}\\|SUCCESS\\|[0-9]+\\|200$`).test(log)));
+    assert(logs.includes(`UU_REA_HTTP_TIMING_CUM_MS|${sequence}|${method}|dns=1|tcp=8|tls=12|firstSend=13|firstReceive=25|finish=27|redirect=0|headers=26|body=28|total=29`));
+    assert(logs.includes(`UU_REA_HTTP_CONNECTION|${sequence}|${method}|reuse=0|proxy=1|cache=0`)); checks++;
   }
+  state.timing = { dnsTiming: 'private-timing', tcpTiming: NaN, tlsTiming: Infinity, firstSendTiming: -1, firstReceiveTiming: { toString() { throw new Error('MUST_NOT_STRINGIFY_TIMING'); } }, totalFinishTiming: 1000000000, redirectTiming: null, responseHeaderTiming: undefined, responseBodyTiming: true, totalTiming: 0 };
+  state.connectionInfo = { isReusedConnection: 'private-reuse', isProxyConnection: 1, isCacheHit: null };
+  let diagnosticStart = diagnosticLogs.length;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).ok, true);
+  assert(diagnosticLogs.slice(diagnosticStart).some(log => /^UU_REA_HTTP_TIMING_CUM_MS\|[0-9]+\|GET\|dns=-\|tcp=-\|tls=-\|firstSend=-\|firstReceive=-\|finish=-\|redirect=-\|headers=-\|body=-\|total=0$/.test(log)));
+  assert(diagnosticLogs.slice(diagnosticStart).some(log => /^UU_REA_HTTP_CONNECTION\|[0-9]+\|GET\|reuse=-\|proxy=-\|cache=-$/.test(log))); checks++;
+  state.timing = undefined; state.connectionInfo = undefined;
+  state.failHeadersObserver = true;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).ok, true); checks++;
+  state.failHeadersObserver = false;
+  diagnosticStart = diagnosticLogs.length;
   await invoke({ op: 'http', url: 'https://api.nrd.nie.163.com/api/v1/devices', method: 'GET' });
+  assert.equal(diagnosticLogs.length, diagnosticStart); checks++;
   assert.equal(state.http.at(-1).options.readTimeout, 30000); assert.equal(state.http.at(-1).options.maxRedirects, 0); checks++;
   assert.equal(state.http.at(-1).options.usingProtocol, undefined); assert.equal(state.http.at(-1).options.header.Connection, undefined); checks++;
   const count = state.http.length;
@@ -121,6 +153,7 @@ let checks = 0;
   state.httpError = { code: 2300028, message: 'private-url-and-body' };
   assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).ok, false); checks++;
   assert.match(diagnosticLogs.at(-1), /^UU_REA_HTTP_ERROR\|GET\|2300028\|[0-9]+$/); checks++;
+  assert(diagnosticLogs.some(log => /^UU_REA_HTTP\|[0-9]+\|GET\|ERROR\|[0-9]+\|2300028$/.test(log))); checks++;
   state.httpError = { code: 'private-code', message: 'private-url-and-body' };
   await invoke({ op: 'http', url: endpoint, method: 'POST' });
   assert.match(diagnosticLogs.at(-1), /^UU_REA_HTTP_ERROR\|POST\|-\|[0-9]+$/); checks++;
@@ -134,9 +167,14 @@ let checks = 0;
   await new Promise(resolve => setImmediate(resolve));
   bridge.dispose();
   assert.equal(state.destroyed, destroyedCount + 1); checks++;
+  bridge.beginPage(true); state.deferred = null;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'GET' })).ok, true); checks++;
+  const logsAtDispose = diagnosticLogs.length;
   release();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(results.length, resultCount); checks++;
+  assert.equal(results.length, resultCount + 1);
+  assert.equal(results.some(result => result.id === 'fixture_cleanup'), false); checks++;
+  assert.equal(diagnosticLogs.length, logsAtDispose, 'disposed generation cannot add late headers/success/error'); checks++;
   assert.equal(state.sockets, 0); checks++;
   state.deferred = null;
   bridge.beginPage(true);
@@ -214,22 +252,29 @@ let checks = 0;
   assert.equal((await invoke({ op: 'http', url: 'https://api.nrd.nie.163.com/api/v1/devices', method: 'GET' })).ok, true); checks++;
 
   const oldReply = gate(); state.deferred = oldReply.promise;
+  state.httpError = { code: 2300052, message: 'private-cancelled-request' };
   const reuseStart = state.http.length;
   bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'GET' }));
   await until(() => state.http.length === reuseStart + 1);
+  state.httpError = null;
   await invoke({ op: 'signal.route', address: ip1 });
   assert.equal(results.filter(result => result.id === 'fixture_reused_id').length, 1); checks++;
   const freshReply = gate(); state.deferred = freshReply.promise;
   const freshResult = new Promise(resolve => { waiting.set('fixture_reused_id', resolve); });
   bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'GET' }));
   await until(() => state.http.length === reuseStart + 2);
+  const logsBeforeOldReply = diagnosticLogs.length;
   oldReply.release(); await flush();
   assert.equal(results.filter(result => result.id === 'fixture_reused_id').length, 1); checks++;
+  assert.equal(diagnosticLogs.length, logsBeforeOldReply, 'cancelled request cannot attribute late error/headers to reused id'); checks++;
   freshReply.release(); state.deferred = null;
   assert.equal((await freshResult).ok, true); checks++;
 
   bridge.dispose(); await flush();
   assert.equal(state.dnsRules.has(signalHost), false); assert.equal(state.dnsMax, 1); checks++;
   assert.equal(state.dnsCalls.every(call => call.host === signalHost), true); checks++;
+  const sequences = diagnosticLogs.filter(log => /^UU_REA_HTTP\|[0-9]+\|(?:GET|POST)\|START\|/.test(log)).map(log => Number(log.split('|')[1]));
+  assert(sequences.every((value, index) => index === 0 || value > sequences[index - 1]), 'request sequence must stay monotonic across page generations'); checks++;
+  assert.equal(JSON.stringify(diagnosticLogs).includes('private'), false); checks++;
   console.log(`Native transport: ${checks} checks passed (offline NetworkKit adapter, no device verification).`);
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
