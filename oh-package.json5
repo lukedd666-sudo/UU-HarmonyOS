@@ -1,8 +1,8 @@
 {
   "modelVersion": "26.0.0",
-  "name": "uu-rea",
+  "name": "uu-harmonyos",
   "version": "0.1.0",
-  "description": "HarmonyOS desktop controller for the official UU Mac client",
+  "description": "HarmonyOS desktop controller for the official UU Mac and Windows clients",
   "dependencies": {},
   "devDependencies": {}
 }

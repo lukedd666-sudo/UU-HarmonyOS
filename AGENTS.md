@@ -1,4 +1,4 @@
-# UU-REA 项目约束
+# UU-HarmonyOS 项目约束
 
 ## 目标与验收
 

@@ -1,7 +1,7 @@
 {
   "name": "entry",
   "version": "0.1.0",
-  "description": "UU-REA desktop entry module",
+  "description": "UU-HarmonyOS desktop entry module",
   "main": "",
   "license": "MIT",
   "dependencies": {}
