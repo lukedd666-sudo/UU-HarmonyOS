@@ -19,23 +19,36 @@ function load(name, imports = {}) {
 const policy = load('NetworkPolicy');
 const state = { http: [], sockets: 0, destroyed: 0, deferred: null, response: 'offline response', dnsRules: new Map(), dnsCalls: [], dnsActive: 0, dnsMax: 0, addGate: null, removeGate: null, failAdd: false, failRemove: false };
 const diagnosticLogs = [];
+const profileDisplay = { width: 3120, height: 2080, densityDPI: 240 };
+let failDisplay = false;
 const http = {
   HttpDataType: { STRING: 0 },
   HttpProtocol: { HTTP1_1: 1 },
   createHttp() {
     return {
+      observedEvents: [],
       on(event, callback) {
-        assert.equal(event, 'headersReceive');
-        if (state.failHeadersObserver) throw new Error('private-observer-error');
-        this.headersCallback = callback;
+        this.observedEvents.push(event);
+        if (event === 'headersReceive') {
+          if (state.failHeadersObserver) throw new Error('private-observer-error');
+          this.headersCallback = callback;
+        } else if (event === 'dataSendProgress') {
+          if (state.failUploadObserver) throw new Error('private-upload-observer-error');
+          this.uploadCallback = callback;
+        } else throw new Error('UNEXPECTED_HTTP_OBSERVER');
       },
       async request(endpoint, options) {
         state.http.push({ endpoint, options, client: this });
         const failure = state.httpError;
+        const progress = state.uploadEvents || [];
+        const omitHeaders = state.omitHeaders;
+        const responseHeaders = state.responseHeaders || { 'content-type': 'text/plain' };
+        const responseCookies = state.responseCookies;
         if (state.deferred) await state.deferred;
-        this.headersCallback?.({ authorization: 'private-header', get poisoned() { throw new Error('MUST_NOT_READ_HEADERS_EVENT'); } });
+        for (const info of progress) this.uploadCallback?.(info);
+        if (!omitHeaders) this.headersCallback?.({ authorization: 'private-header', get poisoned() { throw new Error('MUST_NOT_READ_HEADERS_EVENT'); } });
         if (failure) throw failure;
-        return { responseCode: 200, result: state.response, header: { 'content-type': 'text/plain' }, performanceTiming: state.timing, connectionExtraInfo: state.connectionInfo };
+        return { responseCode: 200, result: state.response, header: responseHeaders, cookies: responseCookies, performanceTiming: state.timing, connectionExtraInfo: state.connectionInfo };
       },
       destroy() { state.destroyed++; this.destroyed = true; },
     };
@@ -71,6 +84,8 @@ const { NativeBridge } = load('NativeBridge', {
   './SigningMaterial': { signProtocolMessage: async () => { throw new Error('MATERIAL_MISSING'); } },
   './SessionStore': { sessionOperation: async () => { throw new Error('SESSION_LOAD_FAILED'); } },
   '@kit.PerformanceAnalysisKit': { hilog: { info(_domain, _tag, _format, record) { diagnosticLogs.push(record); } } },
+  '@kit.BasicServicesKit': { deviceInfo: { osFullName: 'HarmonyOS-fixture', productModel: 'PCEMU-fixture' } },
+  '@kit.ArkUI': { display: { getDefaultDisplaySync() { if (failDisplay) throw new Error('display-unavailable'); return profileDisplay; } } },
   '@kit.NetworkKit': { connection, http, webSocket: { createWebSocket() { state.sockets++; throw new Error('UNEXPECTED_SOCKET_CREATION'); } } },
   '@kit.ArkTS': { util: { Base64Helper: class {} } },
 });
@@ -98,6 +113,14 @@ function invoke(payload) {
 }
 let checks = 0;
 (async () => {
+  const profile = await invoke({ op: 'device.profile' });
+  assert.equal(profile.ok, true, 'the desktop profile must come from platform facts');
+  assert.deepEqual(profile.body, { systemVersion: 'HarmonyOS-fixture', cpu: '', memory: '', model: 'PCEMU-fixture', resolution: '3120x2080', dpi: 240 });
+  failDisplay = true;
+  const noDisplay = await invoke({ op: 'device.profile' });
+  assert.equal(noDisplay.ok, true);
+  assert.equal(noDisplay.body.resolution, ''); assert.equal(noDisplay.body.dpi, 0);
+  failDisplay = false;
   for (const headers of [undefined, {}, { Authorization: 'offline-fixture' }, { 'X-NRD-AUTH': 'offline-fixture', 'X-Param-SIGN': 'offline-fixture' }]) {
     const result = await invoke({ op: 'ws.open', socketId: 'fixture_socket', url: 'wss://signal.nrd.nie.163.com/socket.io/?token=offline-fixture', headers });
     assert.equal(result.ok, false); assert.equal(result.body.code, 'WSS_AUTH_UNVERIFIED'); checks++;
@@ -117,7 +140,7 @@ let checks = 0;
     assert.equal(request.options.maxLimit, 2097152);
     assert.equal(request.options.usingCache, false); assert.equal(request.options.remoteValidation, 'system'); checks++;
     assert.equal(request.options.usingProtocol, http.HttpProtocol.HTTP1_1);
-    assert.equal(request.options.header.Connection, 'close'); checks++;
+    assert.equal(request.options.header.Connection, undefined, 'named signal origins may reuse their own host/port connection pool'); checks++;
     const logs = diagnosticLogs.slice(logStart);
     const starts = logs.filter(log => /^UU_REA_HTTP\|[0-9]+\|(?:GET|POST)\|START\|0\|-$/.test(log));
     assert.equal(starts.length, 1, 'each polling request needs a safe numbered START');
@@ -128,6 +151,67 @@ let checks = 0;
     assert(logs.includes(`UU_REA_HTTP_TIMING_CUM_MS|${sequence}|${method}|dns=1|tcp=8|tls=12|firstSend=13|firstReceive=25|finish=27|redirect=0|headers=26|body=28|total=29`));
     assert(logs.includes(`UU_REA_HTTP_CONNECTION|${sequence}|${method}|reuse=0|proxy=1|cache=0`)); checks++;
   }
+  // Existence flags only: do not parse, stringify, persist or forward cookies.
+  const cookieRecords = logs => logs.filter(log => /^UU_REA_HTTP_COOKIE\|[0-9]+\|(?:GET|POST)\|setCookie=[01]\|cookies=[01]$/.test(log));
+  for (const [headers, cookies, wantSetCookie, wantCookies] of [
+    [{ 'content-type': 'text/plain' }, '', 0, 0],
+    [{ 'Set-Cookie': 'private-cookie-a' }, 'private-cookie-list', 1, 1],
+    [{ 'sEt-CoOkIe': ['private-cookie-a', 'private-cookie-b'] }, undefined, 1, 0],
+    [{ 'set-cookie': [] }, [], 1, 0],
+    [{ 'x-cookie': 'private-unrelated' }, { toString() { throw new Error('MUST_NOT_STRINGIFY_COOKIES'); } }, 0, 0],
+  ]) {
+    state.responseHeaders = headers; state.responseCookies = cookies;
+    const start = diagnosticLogs.length;
+    const result = await invoke({ op: 'http', url: endpoint, method: 'GET' });
+    assert.equal(result.ok, true);
+    const records = cookieRecords(diagnosticLogs.slice(start));
+    assert.equal(records.length, 1, 'one fixed cookie-presence record per completed polling response');
+    assert.match(records[0], new RegExp(`^UU_REA_HTTP_COOKIE\\|[0-9]+\\|GET\\|setCookie=${wantSetCookie}\\|cookies=${wantCookies}$`));
+    assert.equal(state.http.at(-1).options.header.Cookie, undefined, 'observation must not carry cookies into requests'); checks++;
+  }
+  state.responseHeaders = { 'Set-Cookie': 'private-cookie-a' }; state.responseCookies = 'private-cookie-list';
+  for (const method of ['GET', 'POST']) {
+    const start = diagnosticLogs.length;
+    assert.equal((await invoke({ op: 'http', url: 'https://api.nrd.nie.163.com/api/v1/devices', method })).ok, true);
+    assert.equal(cookieRecords(diagnosticLogs.slice(start)).length, 0, 'non-polling API responses must not produce cookie diagnostics'); checks++;
+  }
+  state.responseHeaders = undefined; state.responseCookies = undefined;
+  // Upload completion is separate evidence from response headers or success.
+  const uploadDone = logs => logs.filter(log => /^UU_REA_HTTP\|[0-9]+\|POST\|UPLOAD_DONE\|[0-9]+\|-$/.test(log));
+  state.uploadEvents = [{ sendSize: 0, totalSize: 12 }, { sendSize: 6, totalSize: 12 }, { sendSize: 12, totalSize: 12 }, { sendSize: 12, totalSize: 12 }];
+  for (const noHeadersError of [false, true]) {
+    state.omitHeaders = noHeadersError;
+    state.httpError = noHeadersError ? { code: 2300052, message: 'private-no-response' } : null;
+    const start = diagnosticLogs.length;
+    const result = await invoke({ op: 'http', url: endpoint, method: 'POST', body: 'offline-packet' });
+    const client = state.http.at(-1).client;
+    assert.equal(client.observedEvents.filter(event => event === 'dataSendProgress').length, 1, 'only one upload observer per polling POST');
+    assert.equal(result.ok, !noHeadersError);
+    const logs = diagnosticLogs.slice(start);
+    assert.equal(uploadDone(logs).length, 1, 'valid repeated upload completion must emit once even without response headers');
+    assert.equal(logs.some(log => /\|HEADERS\|/.test(log)), !noHeadersError);
+    const after = diagnosticLogs.length;
+    client.uploadCallback({ sendSize: 12, totalSize: 12 });
+    assert.equal(diagnosticLogs.length, after, 'a settled client cannot emit late upload diagnostics'); checks++;
+  }
+  state.omitHeaders = false; state.httpError = null;
+  state.uploadEvents = [undefined, null, {}, { sendSize: 0, totalSize: 12 }, { sendSize: 6, totalSize: 12 }, { sendSize: 'private-size', totalSize: 4 }, { sendSize: 4, totalSize: 'private-size' }, { sendSize: NaN, totalSize: NaN }, { sendSize: Infinity, totalSize: Infinity }, { sendSize: -1, totalSize: -1 }, { sendSize: 0, totalSize: 0 }, { sendSize: 0.5, totalSize: 0.5 }, { sendSize: 6, totalSize: 5 }, { sendSize: Number.MAX_SAFE_INTEGER + 1, totalSize: Number.MAX_SAFE_INTEGER + 1 }];
+  let uploadStart = diagnosticLogs.length;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'POST', body: 'offline-packet' })).ok, true);
+  assert.equal(uploadDone(diagnosticLogs.slice(uploadStart)).length, 0, 'invalid/incomplete progress cannot claim upload completion'); checks++;
+  state.uploadEvents = [{ sendSize: 12, totalSize: 12 }];
+  state.failUploadObserver = true;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'POST', body: 'offline-packet' })).ok, true, 'unsupported upload observer cannot block HTTP'); checks++;
+  state.failUploadObserver = false; state.failHeadersObserver = true;
+  uploadStart = diagnosticLogs.length;
+  assert.equal((await invoke({ op: 'http', url: endpoint, method: 'POST', body: 'offline-packet' })).ok, true);
+  assert.equal(uploadDone(diagnosticLogs.slice(uploadStart)).length, 1, 'headers observer support is independent from upload observation'); checks++;
+  state.failHeadersObserver = false;
+  for (const [url, method] of [[endpoint, 'GET'], ['https://api.nrd.nie.163.com/api/v1/devices', 'GET'], ['https://api.nrd.nie.163.com/api/v1/devices', 'POST']]) {
+    await invoke({ op: 'http', url, method });
+    assert.equal(state.http.at(-1).client.observedEvents.includes('dataSendProgress'), false, 'ordinary APIs and polling GET must not register upload observation'); checks++;
+  }
+  state.uploadEvents = undefined;
   state.timing = { dnsTiming: 'private-timing', tcpTiming: NaN, tlsTiming: Infinity, firstSendTiming: -1, firstReceiveTiming: { toString() { throw new Error('MUST_NOT_STRINGIFY_TIMING'); } }, totalFinishTiming: 1000000000, redirectTiming: null, responseHeaderTiming: undefined, responseBodyTiming: true, totalTiming: 0 };
   state.connectionInfo = { isReusedConnection: 'private-reuse', isProxyConnection: 1, isCacheHit: null };
   let diagnosticStart = diagnosticLogs.length;
@@ -163,7 +247,8 @@ let checks = 0;
   state.deferred = new Promise(resolve => { release = resolve; });
   const resultCount = results.length;
   const destroyedCount = state.destroyed;
-  bridge.invoke('fixture_cleanup', JSON.stringify({ op: 'http', url: endpoint, method: 'GET' }));
+  state.uploadEvents = [{ sendSize: 12, totalSize: 12 }];
+  bridge.invoke('fixture_cleanup', JSON.stringify({ op: 'http', url: endpoint, method: 'POST', body: 'offline-packet' }));
   await new Promise(resolve => setImmediate(resolve));
   bridge.dispose();
   assert.equal(state.destroyed, destroyedCount + 1); checks++;
@@ -174,7 +259,8 @@ let checks = 0;
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(results.length, resultCount + 1);
   assert.equal(results.some(result => result.id === 'fixture_cleanup'), false); checks++;
-  assert.equal(diagnosticLogs.length, logsAtDispose, 'disposed generation cannot add late headers/success/error'); checks++;
+  assert.equal(diagnosticLogs.length, logsAtDispose, 'disposed generation cannot add late upload/headers/success/error'); checks++;
+  state.uploadEvents = undefined;
   assert.equal(state.sockets, 0); checks++;
   state.deferred = null;
   bridge.beginPage(true);
@@ -186,6 +272,11 @@ let checks = 0;
   function gate() { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; }
   let route = await invoke({ op: 'signal.route', address: ip1 });
   assert.equal(route.ok, true); assert.equal(route.body.bound, true); assert.deepEqual(state.dnsRules.get(signalHost), [ip1]); checks++;
+  for (const method of ['GET', 'POST']) {
+    assert.equal((await invoke({ op: 'http', url: rootEndpoint, method })).ok, true);
+    assert.equal(state.http.at(-1).options.header.Connection, 'close', 'App DNS root routing must keep connection isolation');
+    assert.equal(state.http.at(-1).options.usingProtocol, http.HttpProtocol.HTTP1_1); checks++;
+  }
   const dnsCount = state.dnsCalls.length;
   for (const address of [undefined, null, '127.0.0.1', '042.186.225.118', ['42.186.225.118']]) {
     route = await invoke({ op: 'signal.route', address });
@@ -201,6 +292,7 @@ let checks = 0;
   const poll = state.http[oldHttpCount + 1].client;
   await invoke({ op: 'signal.route', address: ip2 });
   assert.equal(poll.destroyed, true); assert.notEqual(account.destroyed, true); checks++;
+  assert.equal(state.http[oldHttpCount + 1].options.header.Connection, 'close'); checks++;
   assert.equal((await pollResult).body.code, 'SOCKET_CLOSED'); checks++;
   hold.release(); state.deferred = null;
   assert.equal((await apiResult).ok, true); checks++;
@@ -254,19 +346,21 @@ let checks = 0;
   const oldReply = gate(); state.deferred = oldReply.promise;
   state.httpError = { code: 2300052, message: 'private-cancelled-request' };
   const reuseStart = state.http.length;
-  bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'GET' }));
+  state.uploadEvents = [{ sendSize: 12, totalSize: 12 }];
+  bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'POST', body: 'offline-packet' }));
   await until(() => state.http.length === reuseStart + 1);
   state.httpError = null;
   await invoke({ op: 'signal.route', address: ip1 });
   assert.equal(results.filter(result => result.id === 'fixture_reused_id').length, 1); checks++;
   const freshReply = gate(); state.deferred = freshReply.promise;
   const freshResult = new Promise(resolve => { waiting.set('fixture_reused_id', resolve); });
-  bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'GET' }));
+  state.uploadEvents = [{ sendSize: 12, totalSize: 12 }];
+  bridge.invoke('fixture_reused_id', JSON.stringify({ op: 'http', url: rootEndpoint, method: 'POST', body: 'offline-packet' }));
   await until(() => state.http.length === reuseStart + 2);
   const logsBeforeOldReply = diagnosticLogs.length;
   oldReply.release(); await flush();
   assert.equal(results.filter(result => result.id === 'fixture_reused_id').length, 1); checks++;
-  assert.equal(diagnosticLogs.length, logsBeforeOldReply, 'cancelled request cannot attribute late error/headers to reused id'); checks++;
+  assert.equal(diagnosticLogs.length, logsBeforeOldReply, 'cancelled request cannot attribute late upload/error/headers to reused id'); checks++;
   freshReply.release(); state.deferred = null;
   assert.equal((await freshResult).ok, true); checks++;
 

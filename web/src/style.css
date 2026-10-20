@@ -76,6 +76,7 @@ label { display: block; font-size: 13px; }
 .brand { display: flex; align-items: center; gap: 10px; height: 62px; padding: 0 26px; flex: none; color: #303946; font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
 .brand svg { width: 31px; height: 31px; }
 .brand [data-icon] { width: 31px; height: 31px; }
+.brand strong { font-size: 17px; white-space: nowrap; }
 .nav-group-title { display: flex; align-items: center; gap: 8px; padding: 13px 22px 12px; color: #989fac; font-size: 11px; }
 .nav-group-title [data-icon] { width: 14px; height: 14px; }
 .device-list { min-height: 0; overflow-y: auto; padding: 0 10px 12px; }
@@ -83,7 +84,7 @@ label { display: block; font-size: 13px; }
 .device-item:hover:enabled, .nav-item:hover:enabled { background: #e9ecf3; }
 .device-item.is-selected { background: #e3eaf7; }
 .device-icon { display: flex; align-items: center; justify-content: center; width: 29px; height: 29px; flex: none; color: #8b96aa; }
-.device-icon svg { width: 26px; height: 26px; }
+.device-icon svg { width: 29px; height: 29px; }
 .device-item.is-selected .device-icon { color: #367ce8; }
 .device-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.5; }
 .device-state { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #b6bdc9; }
@@ -121,13 +122,13 @@ label { display: block; font-size: 13px; }
 .preview-connect:hover:enabled { background: #f4f8ff; border-color: #74a8f9; }
 .preview-connect svg { width: 16px; height: 16px; }
 .preview-bottom { position: absolute; z-index: 1; left: 18px; right: 18px; bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #7f9cc4; font-size: 10px; }
-.device-preview:not(.is-mac) { border-color: #297aca; background: linear-gradient(128deg, #08509c, #1678d7 52%, #4ca6ed); }
-.device-preview:not(.is-mac)::before { top: -17%; right: 8%; width: 43%; height: 138%; border-radius: 0; background: linear-gradient(90deg, transparent 48.7%, #b4e2ff70 48.7%, #b4e2ff70 50.3%, transparent 50.3%), linear-gradient(0deg, transparent 48.7%, #b4e2ff70 48.7%, #b4e2ff70 50.3%, transparent 50.3%), linear-gradient(130deg, #5cb7f56b, #84cfff1a); transform: perspective(650px) rotateY(-23deg) rotate(-10deg); }
-.device-preview:not(.is-mac)::after { right: -20%; bottom: -83%; width: 90%; height: 130%; background: #73c1ff38; }
-.device-preview:not(.is-mac) .device-art { color: #d7efff; }
-.device-preview:not(.is-mac) .preview-copy h2 { color: #fff; }
-.device-preview:not(.is-mac) .preview-copy p { color: #c8e6ff; }
-.device-preview:not(.is-mac) .preview-bottom { color: #c4e2fc; }
+.device-preview.is-windows { border-color: #297aca; background: linear-gradient(128deg, #08509c, #1678d7 52%, #4ca6ed); }
+.device-preview.is-windows::before { top: -17%; right: 8%; width: 43%; height: 138%; border-radius: 0; background: linear-gradient(90deg, transparent 48.7%, #b4e2ff70 48.7%, #b4e2ff70 50.3%, transparent 50.3%), linear-gradient(0deg, transparent 48.7%, #b4e2ff70 48.7%, #b4e2ff70 50.3%, transparent 50.3%), linear-gradient(130deg, #5cb7f56b, #84cfff1a); transform: perspective(650px) rotateY(-23deg) rotate(-10deg); }
+.device-preview.is-windows::after { right: -20%; bottom: -83%; width: 90%; height: 130%; background: #73c1ff38; }
+.device-preview.is-windows .device-art { color: #d7efff; }
+.device-preview.is-windows .preview-copy h2 { color: #fff; }
+.device-preview.is-windows .preview-copy p { color: #c8e6ff; }
+.device-preview.is-windows .preview-bottom { color: #c4e2fc; }
 .device-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; min-height: 88px; padding: 18px 0; border-bottom: 1px solid var(--border); }
 .device-actions .primary { min-width: 124px; }
 .device-actions .primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
@@ -265,6 +266,7 @@ dialog.settings-dialog::backdrop { background: #13244345; }
   .brand { padding-left: 20px; font-size: 18px; }
   .brand svg { width: 27px; height: 27px; }
   .brand [data-icon] { width: 27px; height: 27px; }
+  .brand strong { font-size: 14px; }
   .device-item { gap: 8px; padding-left: 10px; padding-right: 10px; }
   .home-titlebar { min-height: 64px; gap: 8px; padding-left: 20px; padding-right: 20px; }
   .home-heading { font-size: 18px; }

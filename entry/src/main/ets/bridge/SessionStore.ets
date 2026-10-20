@@ -8,6 +8,7 @@ export interface StoredSession {
   clientId: string;
   deviceId: string;
   uuid: string;
+  registration?: string;
 }
 
 export interface SessionResult { session: StoredSession | null; }
@@ -23,7 +24,11 @@ function aliasQuery(): asset.AssetMap {
 function validate(data: string): StoredSession {
   if (typeof data !== 'string' || data.length > 1024) throw new Error('SESSION_FORMAT');
   const value = JSON.parse(data) as StoredSession;
-  if (value === null || typeof value !== 'object' || Object.keys(value).length !== 5) throw new Error('SESSION_FORMAT');
+  if (value === null || typeof value !== 'object') throw new Error('SESSION_FORMAT');
+  const keys = Object.keys(value);
+  const allowed: string[] = ['token', 'userId', 'clientId', 'deviceId', 'uuid', 'registration'];
+  if (keys.length < 5 || keys.length > 6 || keys.some((key: string) => !allowed.includes(key))) throw new Error('SESSION_FORMAT');
+  if (keys.includes('registration') && value.registration !== 'harmony-desktop-v1') throw new Error('SESSION_FORMAT');
   const fields: string[] = [value.token, value.userId, value.clientId, value.deviceId, value.uuid];
   for (const field of fields) {
     if (typeof field !== 'string' || field.length === 0 || /[\x00-\x20\x7f]/.test(field)) throw new Error('SESSION_FORMAT');

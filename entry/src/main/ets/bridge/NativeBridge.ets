@@ -1,7 +1,8 @@
 import { webview } from '@kit.ArkWeb';
 import { connection, http, webSocket } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
+import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   MAX_BRIDGE_JSON, MAX_HTTP_BODY_CHARS, MAX_SOCKET_DATA_CHARS, validateHttpRequest, validateHeaders,
@@ -54,6 +55,15 @@ interface MaterialImportResult {
 
 interface SignalRouteResult {
   bound: boolean;
+}
+
+interface DesktopDeviceFacts {
+  systemVersion: string;
+  cpu: string;
+  memory: string;
+  model: string;
+  resolution: string;
+  dpi: number;
 }
 
 export class NativeBridge {
@@ -116,6 +126,9 @@ export class NativeBridge {
     try {
       let payload: Object = {} as Record<string, string>;
       switch (request.op) {
+        case 'device.profile':
+          payload = this.deviceProfile();
+          break;
         case 'http':
           payload = await this.httpRequest(id, request, generation);
           break;
@@ -168,6 +181,24 @@ export class NativeBridge {
     }
   }
 
+  private deviceProfile(): DesktopDeviceFacts {
+    let resolution = '';
+    let dpi = 0;
+    try {
+      const screen = display.getDefaultDisplaySync();
+      if (Number.isSafeInteger(screen.width) && screen.width > 0 &&
+        Number.isSafeInteger(screen.height) && screen.height > 0) {
+        resolution = `${screen.width}x${screen.height}`;
+      }
+      if (Number.isSafeInteger(screen.densityDPI) && screen.densityDPI > 0) dpi = screen.densityDPI;
+    } catch (_) {}
+    // Public platform facts only. No serial, UDID, network address or guessed Mac hardware.
+    return {
+      systemVersion: deviceInfo.osFullName, cpu: '', memory: '',
+      model: deviceInfo.productModel, resolution: resolution, dpi: dpi
+    };
+  }
+
   private async httpRequest(id: string, request: BridgeRequest, generation: number): Promise<HttpResult> {
     const method = request.method ?? 'GET';
     const endpoint = validateHttpRequest(request.url ?? '', method);
@@ -208,9 +239,12 @@ export class NativeBridge {
         remoteValidation: 'system'
       };
       if (polling) {
-        // A reused TCP connection could bypass a newly bound App DNS route.
         options.usingProtocol = http.HttpProtocol.HTTP1_1;
-        headers.Connection = 'close';
+        // Only the shared root origin needs isolation from a changed App DNS rule.
+        // Named origins retain the normal TLS hostname/port connection pool key.
+        if (/^https:\/\/nrd\.nie\.163\.com(?::[0-9]+)?\//i.test(endpoint)) {
+          headers.Connection = 'close';
+        }
       }
       if (request.body !== undefined && request.body.length > 0) {
         options.extraData = request.body;
@@ -226,6 +260,22 @@ export class NativeBridge {
           });
         } catch (_) {
           // Diagnostics must not prevent a request on a runtime without this observer.
+        }
+        if (method === 'POST') {
+          let uploadRecorded = false;
+          try {
+            // API 11+: normal request upload progress; never inspect or log packet data.
+            client.on('dataSendProgress', (progress: http.DataSendProgressInfo) => {
+              if (!uploadRecorded && this.isCurrent(generation) && this.requests.get(id) === client &&
+                progress !== undefined && progress !== null && Number.isSafeInteger(progress.sendSize) &&
+                Number.isSafeInteger(progress.totalSize) && progress.totalSize > 0 && progress.sendSize === progress.totalSize) {
+                uploadRecorded = true;
+                hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|POST|UPLOAD_DONE|${Math.max(0, Date.now() - started)}|-`);
+              }
+            });
+          } catch (_) {
+            // Older runtimes may omit upload observation; keep the existing request unchanged.
+          }
         }
       }
       const response = await client.request(endpoint, options);
@@ -247,6 +297,10 @@ export class NativeBridge {
       if (polling && this.isCurrent(generation) && this.requests.get(id) === client) {
         const status = this.diagnosticNumber(response.responseCode);
         hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP|${sequence}|${method}|SUCCESS|${Math.max(0, Date.now() - started)}|${status}`);
+        // Presence only: never log cookie names/values/lengths or change cookie handling.
+        const setCookie = Object.keys(source).some((name: string) => name.toLowerCase() === 'set-cookie');
+        const cookies = typeof response.cookies === 'string' && response.cookies.length > 0;
+        hilog.info(0x0000, 'UU-REA-DIAG', '%{public}s', `UU_REA_HTTP_COOKIE|${sequence}|${method}|setCookie=${setCookie ? 1 : 0}|cookies=${cookies ? 1 : 0}`);
         const timing = response.performanceTiming;
         if (timing !== undefined && timing !== null) {
           // SDK timings are cumulative milliseconds from request start, not phase durations.

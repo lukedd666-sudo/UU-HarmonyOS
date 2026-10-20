@@ -2,11 +2,13 @@ import './style.css';
 import { ControllerError, NativeBridge, type BridgeHost } from './nativeBridge';
 import { UuClient, canConnectDesktop, type OwnedDevice } from './uuClient';
 import { SignalClient } from './signalClient';
+import { createSignalEventQueue } from './signalQueue';
 import { RemoteSession } from './remoteSession';
 import { saveProtocolMaterial } from './material';
 import { ActionGate, runInputAction, videoPoint } from './interactions';
 import { controllerDiagnosticRecord, controllerErrorText } from './errorText';
 import { uiControls, type UiPhase } from './uiState';
+import { devicePlatform, devicePlatformIcon, devicePlatformName } from './devicePresentation';
 
 const bridge = new NativeBridge(window as unknown as BridgeHost);
 const api = new UuClient(bridge);
@@ -31,18 +33,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <section id="boot-view" class="login-view"><div class="spinner" aria-hidden="true"></div><p role="status">正在恢复登录</p></section>
   <section id="login-view" class="login-view" hidden>
     <button id="login-settings" class="icon-button login-settings" aria-label="设置"><span data-icon="settings"></span></button>
-    <div class="login-brand"><span data-icon="monitor"></span><strong>UU-REA</strong></div>
+    <div class="login-brand"><span data-icon="monitor"></span><strong>UU-HarmonyOS</strong></div>
     <h1>登录 UU 账号</h1><p class="login-description">连接你的电脑，继续手边的事。</p>
     <form id="login-form" autocomplete="off">
       <label for="mobile">手机号</label><div class="phone-row"><input id="region" aria-label="国家区号" value="86" inputmode="numeric" maxlength="4" autocomplete="off"><input id="mobile" type="tel" inputmode="tel" placeholder="请输入手机号" autocomplete="off" maxlength="20" required></div>
       <label for="code">短信验证码</label><div class="code-row"><input id="code" inputmode="numeric" autocomplete="off" placeholder="请输入验证码" maxlength="10" required><button id="sms" type="button" class="secondary">获取验证码</button></div>
       <button id="login" type="submit" class="primary wide">登录</button>
     </form><p id="login-status" class="notice" role="status" aria-live="polite"></p>
-    <p class="login-description">UU-REA · 鸿蒙电脑客户端</p>
+    <p class="login-description">UU-HarmonyOS · 鸿蒙电脑客户端</p>
   </section>
   <div id="home-shell" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="brand"><span data-icon="monitor"></span><strong>UU-REA</strong></div>
+      <div class="brand"><span data-icon="monitor"></span><strong>UU-HarmonyOS</strong></div>
       <div class="nav-group-title"><span data-icon="monitor"></span><span>我的设备</span></div>
       <nav id="sidebar-devices" class="device-list" aria-label="我的设备"></nav>
       <button id="all-devices" class="nav-item"><span data-icon="grid"></span>全部设备</button>
@@ -126,7 +128,6 @@ let roomDevice = '';
 let takeoverDevice = '';
 let cancelRequested = false;
 let wantsControl = true;
-let signalQueue: Promise<void> = Promise.resolve();
 let smsUntil = 0;
 let connectedAt = 0;
 let mediaSample: ReturnType<typeof setInterval> | undefined;
@@ -134,7 +135,8 @@ let previousFocus: HTMLElement | null = null;
 
 function selectedDevice(): OwnedDevice | undefined { return devices.find(device => device.deviceId === selectedId); }
 function deviceState(device: OwnedDevice): string { return canConnectDesktop(device) ? '可远控' : device.platform === 1 || device.platform === 4 ? '当前不可控制' : '暂不支持'; }
-function platformName(device: OwnedDevice): string { return device.platform === 1 ? 'Windows' : device.platform === 4 ? 'Mac' : '其他设备'; }
+function platformName(device: OwnedDevice): string { return devicePlatformName(devicePlatform(device, api.controllerDeviceId)); }
+function platformIcon(device: OwnedDevice): string { return devicePlatformIcon(devicePlatform(device, api.controllerDeviceId)); }
 function status(message: string, error = false): void {
   if (api.persistenceWarning) {
     const warning = new ControllerError(api.persistenceWarning).message;
@@ -178,8 +180,8 @@ function update(): void {
   for (const id of ['sms', 'login', 'init', 'save-material']) element<HTMLButtonElement>(id).disabled = actions.busy || !bridge.available || Boolean(session) || (Boolean(api.pendingRoomDeviceId) && api.loggedIn);
   element<HTMLButtonElement>('sms').disabled ||= smsUntil > Date.now();
   element<HTMLButtonElement>('sms').textContent = smsUntil > Date.now() ? Math.ceil((smsUntil - Date.now()) / 1000) + ' 秒后重试' : '获取验证码';
-  element<HTMLButtonElement>('logout').disabled = actions.busy || (!api.loggedIn && !api.persistenceWarning);
-  element('account-state').textContent = api.loggedIn ? '已登录 UU 账号' : '尚未登录';
+  element<HTMLButtonElement>('logout').disabled = actions.busy || (!api.hasAccountState && !api.persistenceWarning);
+  element('account-state').textContent = api.loggedIn ? '已登录 UU 账号' : api.hasAccountState ? '登录恢复未完成' : '尚未登录';
 }
 async function run(action: () => Promise<void>): Promise<void> {
   await actions.run(async () => {
@@ -222,8 +224,9 @@ function updateDevicePresentation(): void {
   element('preview-title').textContent = selected.name;
   element('preview-subtitle').textContent = canConnectDesktop(selected) ? '点击进入桌面，开始远程操作' : '请确认电脑上的 UU 已登录并允许远程控制';
   element('platform-label').textContent = platformName(selected);
-  element('device-preview').classList.toggle('is-mac', selected.platform === 4);
-  element('platform-emblem').innerHTML = icon(selected.platform === 1 ? 'windows' : 'monitor');
+  element('device-preview').classList.toggle('is-mac', devicePlatform(selected, api.controllerDeviceId) === 'mac');
+  element('device-preview').classList.toggle('is-windows', devicePlatform(selected, api.controllerDeviceId) === 'windows');
+  element('platform-emblem').innerHTML = platformIcon(selected);
   element('device-hint').textContent = canConnectDesktop(selected) ? '电脑已允许远程控制。点击上方桌面或“远程控制”连接。' : '此设备当前不可连接。请在被控端确认网络、账号及远控权限后刷新。';
 }
 function selectDevice(device: OwnedDevice): void {
@@ -235,7 +238,8 @@ function renderDevices(): void {
   sidebar.replaceChildren(); grid.replaceChildren();
   for (const device of devices) {
     const button = document.createElement('button'); button.className = 'device-item'; button.dataset.deviceId = device.deviceId;
-    const mark = document.createElement('span'); mark.className = 'device-icon'; mark.innerHTML = icon(device.platform === 1 ? 'windows' : 'monitor');
+    const mark = document.createElement('span'); mark.className = 'device-icon'; mark.innerHTML = platformIcon(device);
+    mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', platformName(device));
     const name = document.createElement('span'); name.className = 'device-label'; name.textContent = device.name;
     const state = document.createElement('span'); state.className = 'device-state'; state.classList.toggle('unavailable', !canConnectDesktop(device)); state.setAttribute('aria-label', deviceState(device));
     button.append(state, mark, name); button.title = device.name + ' · ' + deviceState(device);
@@ -243,7 +247,8 @@ function renderDevices(): void {
     button.addEventListener('dblclick', () => { selectDevice(device); if (canConnectDesktop(device)) void run(() => connectSelected()); });
     sidebar.append(button);
     const card = document.createElement('button'); card.className = 'device-card'; card.dataset.deviceId = device.deviceId;
-    const cardIcon = document.createElement('span'); cardIcon.className = 'device-card-icon'; cardIcon.innerHTML = icon(device.platform === 1 ? 'windows' : 'monitor');
+    const cardIcon = document.createElement('span'); cardIcon.className = 'device-card-icon'; cardIcon.innerHTML = platformIcon(device);
+    cardIcon.setAttribute('role', 'img'); cardIcon.setAttribute('aria-label', platformName(device));
     const copy = document.createElement('span'); copy.className = 'device-card-copy';
     const cardName = document.createElement('strong'); cardName.textContent = device.name;
     const description = document.createElement('small'); description.textContent = platformName(device) + ' · ' + deviceState(device);
@@ -315,14 +320,11 @@ async function connectSelected(forceJoin = false): Promise<void> {
     }
     roomDevice = selected.deviceId;
     if (cancelRequested) { await disconnect(); return; }
-    connection = new SignalClient(bridge, event => {
-      const currentConnection = connection;
-      signalQueue = signalQueue.then(async () => { if (signal === currentConnection) await session?.apply(event); }).catch(() => {
-        if (signal !== currentConnection) return;
-        console.info('UU_REA_RTC|APPLY_FAILED');
-        clearLocalSession(); showConnectionError('远程连接未能建立，请重新连接。');
-      });
-    }, () => {
+    const enqueueSignalEvent = createSignalEventQueue(() => signal === connection, event => session?.apply(event), () => {
+      console.info('UU_REA_RTC|APPLY_FAILED');
+      clearLocalSession(); showConnectionError('远程连接未能建立，请重新连接。');
+    });
+    connection = new SignalClient(bridge, event => { void enqueueSignalEvent(event); }, () => {
       if (signal !== connection || cancelRequested) return;
       clearLocalSession(); showConnectionError('与电脑的连接已中断。请重新连接。');
     }, selected.platform === 1);

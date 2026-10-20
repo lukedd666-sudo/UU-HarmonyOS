@@ -29,20 +29,21 @@ it('maps confirmed invalid verification code only for a login refusal, retaining
 
 it('blocks HTTP entirely if native signing material is absent', async () => {
   const requests: Record<string, unknown>[] = [];
-  const host: BridgeHost = { UUBridge: { invoke(id, payload) { requests.push(JSON.parse(payload)); host.__uuNativeResult?.(id, false, '{"code":"MATERIAL_MISSING"}'); } } };
+  const host: BridgeHost = { UUBridge: { invoke(id, payload) { const request = JSON.parse(payload); requests.push(request); if (request.op === 'device.profile') host.__uuNativeResult?.(id, true, JSON.stringify({ systemVersion: 'fixture-system', cpu: '', memory: '', model: 'fixture-model', resolution: '1920x1080', dpi: 160 })); else host.__uuNativeResult?.(id, false, '{"code":"MATERIAL_MISSING"}'); } } };
   const api = new UuClient(new NativeBridge(host));
   await expect(api.sendMobileCode('86', '13800138000')).rejects.toMatchObject({ code: 'MATERIAL_MISSING', diagnostics: { stage: 'INIT' } });
-  expect(requests.map(r => r.op)).toEqual(['hmac']);
+  expect(requests.map(r => r.op)).toEqual(['device.profile', 'hmac']);
 });
 
 function diagnosticClient(responseForPath: (url: string, request: Record<string, unknown>) => { status: number; body: unknown; headers?: Record<string, string> }): UuClient {
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload);
-    if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    if (request.op === 'device.profile') host.__uuNativeResult?.(id, true, JSON.stringify({ systemVersion: 'fixture-system', cpu: '', memory: '', model: 'fixture-model', resolution: '1920x1080', dpi: 160 }));
+    else if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
     else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
     else if (request.op === 'signal.route') host.__uuNativeResult?.(id, true, JSON.stringify({ bound: request.address !== '' }));
     else {
-      const result = request.url.endsWith('/device/android/init')
+      const result = request.url.endsWith('/device/macos/init')
         ? { status: 200, body: { code: 0, data: { device_id: 'fixture-controller' } } }
         : responseForPath(request.url, request);
       host.__uuNativeResult?.(id, true, JSON.stringify({ ...result, body: JSON.stringify(result.body) }));
@@ -55,7 +56,8 @@ function routedClient(routeResult: (address: string) => { bound: boolean }) {
   const requests: Record<string, unknown>[] = [], pendingPolls: string[] = [];
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload); requests.push(request);
-    if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    if (request.op === 'device.profile') host.__uuNativeResult?.(id, true, JSON.stringify({ systemVersion: 'fixture-system', cpu: '', memory: '', model: 'fixture-model', resolution: '1920x1080', dpi: 160 }));
+    else if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
     else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
     else if (request.op === 'signal.route') {
       try { host.__uuNativeResult?.(id, true, JSON.stringify(routeResult(request.address))); }
@@ -63,7 +65,7 @@ function routedClient(routeResult: (address: string) => { bound: boolean }) {
     } else if (request.op === 'http') {
       const url = new URL(request.url);
       if (url.pathname === '/socket.io/') { pendingPolls.push(id); return; }
-      const body = url.pathname.endsWith('/device/android/init') ? { code: 0, data: { device_id: 'fixture-controller' } }
+      const body = url.pathname.endsWith('/device/macos/init') ? { code: 0, data: { device_id: 'fixture-controller' } }
         : url.pathname.endsWith('/login/by_mobile') ? { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } }
         : url.pathname.includes('/room/join/') ? { code: 0, data: { room_config: { token: 'fixture-room', signal_servers: ['42.186.225.118:8443', '8.8.8.8:443'] } } }
         : { code: 0 };
@@ -268,10 +270,11 @@ it('signs the exact JSON sent to native HTTP and keeps login state in memory unt
   const requests: Record<string, unknown>[] = [];
   const host: BridgeHost = { UUBridge: { invoke(id, payload) {
     const request = JSON.parse(payload); requests.push(request);
-    if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
+    if (request.op === 'device.profile') host.__uuNativeResult?.(id, true, JSON.stringify({ systemVersion: 'fixture-system', cpu: '', memory: '', model: 'fixture-model', resolution: '1920x1080', dpi: 160 }));
+    else if (request.op === 'hmac') host.__uuNativeResult?.(id, true, JSON.stringify({ hex: 'a'.repeat(64) }));
     else if (request.op.startsWith('session.')) host.__uuNativeResult?.(id, true, JSON.stringify({ session: null }));
     else {
-      const body = request.url.endsWith('/device/android/init') ? { code: 0, data: { device_id: 'local-controller' } }
+      const body = request.url.endsWith('/device/macos/init') ? { code: 0, data: { device_id: 'local-controller' } }
         : request.url.endsWith('/login/by_mobile') ? { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } }
         // Fields supported by upstream frontend/src/devices/deviceSummary.ts.
         : { code: 0, data: { desktop_devices: [

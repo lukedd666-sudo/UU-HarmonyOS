@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const ts = require('/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const deveco = process.env.UU_REA_DEVECO || '/Applications/DevEco-Studio.app/Contents';
+const ts = require(path.join(deveco, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const Tag = Object.fromEntries(['ALIAS', 'SECRET', 'ACCESSIBILITY', 'SYNC_TYPE', 'CONFLICT_RESOLUTION', 'RETURN_TYPE'].map(k => [k, k]));
 let stored = null, fail = false, gate = null;
 const asset = { Tag, Accessibility: { DEVICE_UNLOCKED: 2 }, SyncType: { NEVER: 0 }, ConflictResolution: { OVERWRITE: 0 }, ReturnType: { ALL: 0 },
@@ -35,6 +36,15 @@ const operation = (op, data = '', current = () => true) => output.exports.sessio
   assert.equal((await operation('load')).session.token, fixture.token);
   fixture.token = 'fixture-updated'; await operation('save', JSON.stringify(fixture));
   assert.equal((await operation('load')).session.token, fixture.token);
+  const desktop = { ...fixture, registration: 'harmony-desktop-v1' };
+  await operation('save', JSON.stringify(desktop));
+  assert.equal((await operation('load')).session.registration, 'harmony-desktop-v1');
+  for (const registration of ['android', '', null, 4]) {
+    await assert.rejects(operation('save', JSON.stringify({ ...fixture, registration })), /SESSION_SAVE_FAILED/);
+  }
+  await assert.rejects(operation('save', JSON.stringify({ ...desktop, phone: 'never-store' })), /SESSION_SAVE_FAILED/);
+  await operation('save', JSON.stringify(fixture));
+  assert.equal((await operation('load')).session.registration, undefined, 'legacy sessions remain readable');
   for (const data of ['null', '{}', JSON.stringify({ ...fixture, phone: 'never-store' }), JSON.stringify({ ...fixture, token: 'x'.repeat(1100) })]) {
     await assert.rejects(operation('save', data), /SESSION_SAVE_FAILED/);
   }

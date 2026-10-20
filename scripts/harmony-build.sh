@@ -15,5 +15,11 @@ for UU_REA_TOOL in "$NODE_HOME/bin/node" "$JAVA_HOME/bin/java" "$UU_REA_DEVECO/t
   fi
 done
 cd "$UU_REA_ROOT"
+for UU_REA_RESOURCE in index.html app.js style.css THIRD_PARTY_NOTICES.md; do
+  if [[ ! -f "entry/src/main/resources/rawfile/$UU_REA_RESOURCE" ]]; then
+    echo 'Missing generated web resources. Run ./scripts/build-all.sh first.' >&2
+    exit 1
+  fi
+done
 # No signing profile or account certificate is copied. Produces an unsigned HAP.
 exec "$UU_REA_DEVECO/tools/hvigor/bin/hvigorw" --mode module -p product=default -p module=entry@default -p buildMode=release assembleHap --no-daemon "$@"

@@ -75,7 +75,7 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
               if (this.stopped) return;
               if (index < batches.length) postNext();
               else { this.writable = true; this.emitReserved('drain'); }
-            }).catch(() => this.fail());
+            }).catch(error => this.fail(error));
           });
         };
         postNext();
@@ -88,7 +88,7 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
           if (this.stopped) return;
           this.writable = true;
           this.emitReserved('drain');
-        }).catch(() => this.fail());
+        }).catch(error => this.fail(error));
       });
     }
     private async poll(): Promise<void> {
@@ -97,14 +97,14 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
         if (this.stopped) return;
         for (const packet of decodePayload(response.body, this.socket.binaryType)) {
           if (this.stopped) return;
-          if (packet.type === 'error') { this.fail(); return; }
+          if (packet.type === 'error') { this.fail('NATIVE_POLLING_PARSE_ERROR'); return; }
           if (packet.type === 'open' && this.readyState === 'opening') this.onOpen();
           if (packet.type === 'close') { this.onClose({ description: 'polling server closed' }); return; }
           if (packet.type === 'ping') console.info('UU_REA_PING_RX');
           this.onPacket(packet);
         }
         if (!this.stopped && this.readyState === 'open') void this.poll();
-      } catch { this.fail(); }
+      } catch (error) { this.fail(error); }
     }
     private async request(method: 'GET' | 'POST', body?: string, soac?: { batch: number; offers: number; candidates: number }, pongs = 0): Promise<{ status: number; body: string }> {
       const started = Date.now();
@@ -124,16 +124,18 @@ export function nativePollingTransport(bridge: NativeBridge, authHeaders: Record
       try {
         const response = await bridge.request<{ status: number; body: string }>({ op: 'http', method, url, headers: { ...authHeaders, ...(method === 'POST' ? { 'Content-Type': 'text/plain;charset=UTF-8' } : {}) }, ...(body === undefined ? {} : { body }) });
         if (!this.stopped && Number.isInteger(response.status) && response.status >= 100 && response.status <= 599) console.info(`UU_REA_POLL|${method}|${response.status}|${Math.max(0, Date.now() - started)}`);
+        if (response.status === 401 || response.status === 403) throw new Error('NATIVE_POLLING_REJECTED');
         if (response.status < 200 || response.status >= 300 || typeof response.body !== 'string') throw new Error('POLLING_FAILED');
         recordSoac('OK', response.status === 200 ? response.body === 'ok' ? 'OK' : 'OTHER' : 'NONE');
         recordPong('OK');
         return response;
       } catch (error) { recordSoac('FAIL', 'NONE'); recordPong('FAIL'); throw error; }
     }
-    private fail(): void {
+    private fail(error?: unknown): void {
       if (this.stopped) return;
       this.stopped = true;
-      this.onError('native HTTPS polling failed', undefined);
+      const description = error === 'NATIVE_POLLING_PARSE_ERROR' ? error : error instanceof Error && error.message === 'NATIVE_POLLING_REJECTED' ? error.message : undefined;
+      this.onError('native HTTPS polling failed', description);
     }
   };
 }

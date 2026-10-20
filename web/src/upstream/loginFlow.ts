@@ -3,6 +3,7 @@
 // Full license: THIRD_PARTY_NOTICES.md.
 import type {
   AndroidDeviceInitProfile,
+  DesktopDeviceInitProfile,
   MobileCodeRequestInput,
   MobileLoginRequestInput,
   MobileLoginResult,
@@ -12,6 +13,7 @@ import type {
 export const MOBILE_CODE_PATH = "/api/v1/security/mobile/code";
 export const MOBILE_LOGIN_PATH = "/api/v1/login/by_mobile";
 export const ANDROID_DEVICE_INIT_PATH = "/api/v1/device/android/init";
+export const DESKTOP_DEVICE_INIT_PATH = "/api/v1/device/macos/init";
 
 export function buildMobileCodeRequest(input: MobileCodeRequestInput): UuRequest {
   return {
@@ -43,6 +45,11 @@ export function buildAndroidDeviceInitRequest(profile: AndroidDeviceInitProfile)
     path: ANDROID_DEVICE_INIT_PATH,
     body: profile,
   };
+}
+
+/** Official desktop wire shape; the profile describes HarmonyOS without inventing Mac hardware. */
+export function buildDesktopDeviceInitRequest(profile: DesktopDeviceInitProfile): UuRequest {
+  return { method: "POST", path: DESKTOP_DEVICE_INIT_PATH, body: profile };
 }
 
 export function normalizeMobileLoginResult(body: unknown): MobileLoginResult {

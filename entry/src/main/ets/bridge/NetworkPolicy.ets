@@ -41,6 +41,7 @@ export function isSafeDiagnosticRecord(record: string): boolean {
   if (/^UU_REA_MEDIA\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,12}\|[0-9]{1,5}\|[0-9]{1,5}\|[0-4]$/.test(record)) return true;
   if (/^UU_REA_SIGNAL_END\|(PING_TIMEOUT|TRANSPORT_ERROR|TRANSPORT_CLOSE|SERVER_DISCONNECT|CLIENT_DISCONNECT|PARSE_ERROR|OTHER)$/.test(record)) return true;
   if (/^UU_REA_RTC\|KEY_REFRESH_(OK|REJECTED|FAILED)$/.test(record)) return true;
+  if (['UU_REA_RTC|INITIAL_RETRY', 'UU_REA_RTC|RECOVERY_START', 'UU_REA_RTC|RECOVERY_OK', 'UU_REA_RTC|RECOVERY_FAILED'].includes(record)) return true;
   if (/^UU_REA_POLL\|(GET|POST)\|[1-5][0-9]{2}\|[0-9]{1,8}$/.test(record)) return true;
   if (record === 'UU_REA_PING_RX') return true;
   if (/^UU_REA_PONG_POST\|[1-9][0-9]{0,11}\|(BEGIN|OK|FAIL)\|[1-9][0-9]{0,11}$/.test(record) && !/[\r\n]/.test(record)) return true;

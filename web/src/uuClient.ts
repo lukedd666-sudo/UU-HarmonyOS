@@ -1,11 +1,13 @@
 // API fields and signing canonicalization adapted from MIT upstream; see THIRD_PARTY_NOTICES.md.
 import { asRecord, ControllerError, type ApiStage, type ErrorDiagnosticsInput, type NativeBridge } from './nativeBridge';
 import { apiUrl, normalizeSignalEndpoint, signalOriginDiagnosticRecord } from './security';
-import { buildAndroidDeviceInitRequest, buildMobileCodeRequest, buildMobileLoginRequest, normalizeDeviceInitResult, normalizeMobileLoginResult } from './upstream/loginFlow';
+import { buildDesktopDeviceInitRequest, buildMobileCodeRequest, buildMobileLoginRequest, normalizeDeviceInitResult, normalizeMobileLoginResult } from './upstream/loginFlow';
 import { normalizeStreamerRoomConfig } from './upstream/roomConfig';
 import type { LoginState, StreamerRoomConfig } from './upstream/types';
 
 export interface OwnedDevice { deviceId: string; name: string; mac: boolean; controllable: boolean; platform?: number }
+export interface DesktopDeviceFacts { systemVersion: string; cpu: string; memory: string; model: string; resolution: string; dpi: number }
+const DESKTOP_REGISTRATION = 'harmony-desktop-v1';
 export function canConnectDesktop(device: OwnedDevice | undefined): device is OwnedDevice & { platform: 1 | 4 } {
   return Boolean(device?.controllable && (device.platform === 1 || device.platform === 4));
 }
@@ -19,7 +21,8 @@ export class UuClient {
   private routeActive = false;
   private storageWarning = '';
   constructor(private readonly bridge: NativeBridge) {}
-  get loggedIn(): boolean { return Boolean(this.state.token && this.state.userId && this.state.deviceId); }
+  get loggedIn(): boolean { return Boolean(this.state.token && this.state.userId && this.state.deviceId && this.state.registration === DESKTOP_REGISTRATION); }
+  get hasAccountState(): boolean { return Boolean(this.state.token || this.state.userId); }
   get controllerDeviceId(): string { return this.state.deviceId ?? ''; }
   get pendingRoomDeviceId(): string { return this.pendingRoom; }
   get persistenceWarning(): string { return this.storageWarning; }
@@ -33,12 +36,16 @@ export class UuClient {
       if (result?.session === null) return false;
       const saved = asRecord(result?.session);
       const fields = ['token', 'userId', 'clientId', 'deviceId', 'uuid'] as const;
-      if (Object.keys(saved).length !== fields.length || fields.some(key => typeof saved[key] !== 'string' || !saved[key] || /[\x00-\x20\x7f]/.test(saved[key] as string))) throw new Error();
+      const desktop = saved.registration === DESKTOP_REGISTRATION;
+      if (Object.keys(saved).length !== fields.length + (desktop ? 1 : 0) || fields.some(key => typeof saved[key] !== 'string' || !saved[key] || /[\x00-\x20\x7f]/.test(saved[key] as string))) throw new Error();
       if (JSON.stringify(saved).length > 1024) throw new Error();
-      this.state = Object.fromEntries(fields.map(key => [key, saved[key]]));
+      this.state = { ...Object.fromEntries(fields.map(key => [key, saved[key]])), ...(desktop ? { registration: DESKTOP_REGISTRATION } : {}) };
       this.storageWarning = '';
-      return true;
     } catch { this.storageWarning = 'SESSION_LOAD_FAILED'; throw new ControllerError('SESSION_LOAD_FAILED'); }
+    // A legacy Android device ID must never bypass desktop registration.
+    // Network errors here are INIT failures, not secure-storage read failures.
+    await this.initialize();
+    return true;
   }
 
   async logout(): Promise<void> {
@@ -53,19 +60,30 @@ export class UuClient {
   }
 
   async initialize(): Promise<void> {
-    if (this.state.deviceId) return;
-    this.state.clientId ||= `uu-rea-${randomId()}`;
+    if (this.state.deviceId && this.state.registration === DESKTOP_REGISTRATION) return;
     this.state.uuid ||= randomId();
-    const request = buildAndroidDeviceInitRequest({
-      name: 'UU-REA HarmonyOS Controller', client_id: this.state.clientId,
-      system_id: this.state.clientId, system_version: 'HarmonyOS', gaid: '',
-      install_id: this.state.uuid, build_fingerprint: '', brand: 'Huawei',
-      manufacturer: 'Huawei', model: 'HarmonyOS PC', product: 'UU-REA',
-      rom: 'HarmonyOS', abi: 'arm64-v8a', resolution: '1920x1080', screen_size: '1920x1080', dpi: 160,
-    });
-    const result = await this.request('INIT', request.method, request.path, request.body, false);
-    try { this.state.deviceId = normalizeDeviceInitResult(result.body); }
-    catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
+    // A stable new namespace avoids reusing the Android server's idempotency identity.
+    // Failed migration does not write or erase the previous secure session.
+    this.state.clientId = `uu-rea-desktop-${this.state.uuid}`;
+    this.state.deviceId = undefined;
+    try {
+      const facts = await this.bridge.request<DesktopDeviceFacts>({ op: 'device.profile' });
+      if (!facts || ['systemVersion', 'cpu', 'memory', 'model', 'resolution'].some(key => typeof facts[key as keyof DesktopDeviceFacts] !== 'string') || !Number.isSafeInteger(facts.dpi) || facts.dpi < 0) throw new ControllerError('API_FORMAT');
+      const request = buildDesktopDeviceInitRequest({
+        name: 'UU-REA HarmonyOS Computer', client_id: this.state.clientId,
+        system_id: this.state.uuid, system_version: facts.systemVersion, cpu: facts.cpu,
+        memory: facts.memory, model_identifier: '', model: facts.model, model_number: '',
+        system_name: 'HarmonyOS', os: 'HarmonyOS', mac: '', resolution: facts.resolution,
+        video: [], dpi: facts.dpi, controllable: false,
+      });
+      const result = await this.request('INIT', request.method, request.path, request.body, false);
+      try { this.state.deviceId = normalizeDeviceInitResult(result.body); }
+      catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
+      this.state.registration = DESKTOP_REGISTRATION;
+      if (this.state.token && this.state.userId) await this.saveSession(false);
+    } catch (error) {
+      throw new ControllerError(error instanceof ControllerError ? error.code : 'NATIVE_FAILURE', { ...(error instanceof ControllerError ? error.diagnostics : {}), stage: 'INIT' });
+    }
   }
   async sendMobileCode(region: string, mobile: string): Promise<void> {
     await this.initialize();
@@ -81,11 +99,15 @@ export class UuClient {
       const login = normalizeMobileLoginResult(result.body);
       this.state = { ...this.state, token: login.token, userId: login.userId };
     } catch { throw new ControllerError('API_FORMAT', result.diagnostics); }
+    await this.saveSession(true);
+  }
+  private async saveSession(clearOnFailure: boolean): Promise<void> {
     try {
-      const { token, userId, clientId, deviceId, uuid } = this.state;
-      await this.bridge.request({ op: 'session.save', data: JSON.stringify({ token, userId, clientId, deviceId, uuid }) });
+      const { token, userId, clientId, deviceId, uuid, registration } = this.state;
+      await this.bridge.request({ op: 'session.save', data: JSON.stringify({ token, userId, clientId, deviceId, uuid, registration }) });
       this.storageWarning = '';
     } catch {
+      if (!clearOnFailure) { this.storageWarning = 'SESSION_SAVE_FAILED'; return; }
       try {
         await this.bridge.request({ op: 'session.clear' });
         this.storageWarning = 'SESSION_SAVE_FAILED';
@@ -170,7 +192,7 @@ export class UuClient {
     if (requireAuth && !this.loggedIn) throw new ControllerError('AUTH_REQUIRED');
     const headers: Record<string, string> = {
       'X-Param-CHN': 'nochannel', 'X-Param-OPR': '', 'X-Param-PKGN': 'com.netease.uuremote',
-      'X-Param-PLAT': '2', 'X-Param-REL': 'prod', 'X-Param-VC': '423000', 'X-Param-VN': '4.23.0',
+      'X-Param-PLAT': '4', 'X-Param-REL': 'prod', 'X-Param-VC': '423000', 'X-Param-VN': '4.23.0',
       'X-Param-ABI': 'arm64-v8a', 'X-Param-client-id': this.state.clientId ?? '',
       'X-Param-device-id': this.state.deviceId ?? '', 'X-Param-user-id': this.state.userId ?? '',
       'X-Param-OAID': '', 'X-Param-TS': String(Math.floor(Date.now() / 1000)), 'X-Param-CNT': 'CN', 'X-Param-LANG': 'zh-CN',
@@ -190,7 +212,7 @@ export class UuClient {
     catch { throw new ControllerError(response.status < 200 || response.status >= 300 ? 'API_REJECTED' : 'API_FORMAT'); }
     const code = asRecord(result).code;
     diagnostics.businessCode = code;
-    if (requireAuth && (code === 1120 || code === '1120')) {
+    if (this.state.token && (code === 1120 || code === '1120')) {
       try { await this.logout(); }
       catch { throw new ControllerError('AUTH_EXPIRED_CLEAR_FAILED'); }
       throw new ControllerError('AUTH_EXPIRED');

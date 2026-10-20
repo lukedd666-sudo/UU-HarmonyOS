@@ -5,6 +5,12 @@ oh_modules/
 **/build/
 **/.hvigor/
 **/dist/
+# ArkWeb resources are generated from web/ by scripts/build-all.sh.
+/entry/src/main/resources/rawfile/
+# Installable packages and local debug/signed builds.
+*.hap
+*.hsp
+*.app
 .idea/
 local.properties
 **/local.properties

@@ -10,13 +10,14 @@ function fixture() {
       const request = JSON.parse(payload);
       const ok = (body: unknown) => host.__uuNativeResult?.(id, true, JSON.stringify(body));
       const fail = (code: string) => host.__uuNativeResult?.(id, false, JSON.stringify({ code }));
-      if (request.op === 'session.load') ok({ session: saved });
+      if (request.op === 'device.profile') ok({ systemVersion: 'fixture-system', cpu: '', memory: '', model: 'fixture-model', resolution: '1920x1080', dpi: 160 });
+      else if (request.op === 'session.load') ok({ session: saved });
       else if (request.op === 'session.clear') { if (control.failClear) fail('SESSION_CLEAR_FAILED'); else { saved = null; ok({ session: null }); } }
       else if (request.op === 'session.save') { if (control.failSave) fail('SESSION_SAVE_FAILED'); else { saved = JSON.parse(request.data); ok({ session: null }); } }
       else if (request.op === 'hmac') ok({ hex: 'a'.repeat(64) });
       else {
         control.http.push(request);
-        const body = request.url.endsWith('/device/android/init') ? { code: 0, data: { device_id: 'fixture-controller' } }
+        const body = request.url.endsWith('/device/macos/init') ? { code: 0, data: { device_id: 'fixture-controller' } }
           : request.url.endsWith('/login/by_mobile') ? { code: 0, data: { user_id: 'fixture-user', token: 'fixture-token' } }
           : control.expired ? { code: 1120 } : { code: 0, data: { desktop_devices: [] } };
         ok({ status: body.code === 1120 ? 400 : 200, body: JSON.stringify(body), headers: {} });
@@ -32,7 +33,7 @@ it('restores both account and controller identity across page disposal without p
   expect(await first.restore()).toBe(false);
   await first.login('86', '13800138000', '123456');
   const saved = f.saved() as Record<string, string>;
-  expect(Object.keys(saved).sort()).toEqual(['clientId', 'deviceId', 'token', 'userId', 'uuid']);
+  expect(Object.keys(saved).sort()).toEqual(['clientId', 'deviceId', 'registration', 'token', 'userId', 'uuid']);
   expect(JSON.stringify(saved)).not.toContain('13800138000');
   expect(JSON.stringify(saved)).not.toContain('123456');
   first.clear();

@@ -11,6 +11,7 @@ export interface LoginState {
   oaid?: string;
   uuid?: string;
   channel?: string;
+  registration?: "harmony-desktop-v1";
 }
 
 export interface AuthStatus {
@@ -122,6 +123,26 @@ export interface AndroidDeviceInitProfile {
   resolution: string;
   screen_size: string;
   dpi: number;
+}
+
+/** Fields recovered from the official desktop init request; unavailable facts stay empty. */
+export interface DesktopDeviceInitProfile {
+  name: string;
+  client_id: string;
+  system_id: string;
+  system_version: string;
+  cpu: string;
+  memory: string;
+  model_identifier: string;
+  model: string;
+  model_number: string;
+  system_name: string;
+  os: string;
+  mac: string;
+  resolution: string;
+  video: string[];
+  dpi: number;
+  controllable: boolean;
 }
 
 export interface StreamerRoomConfig {

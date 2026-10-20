@@ -1,61 +1,75 @@
-# UU-REA
+# UU-HarmonyOS
 
-面向鸿蒙电脑的UU协议主控实验，连接用户自己的官方网易UU Windows / Mac客户端，查看和操作本人电脑。
+面向鸿蒙电脑的远程控制实验客户端，连接本人账号下的官方网易 UU Mac / Windows 客户端，查看和操作自己的电脑。项目独立开发，**不是网易官方产品**。
 
-当前已在Mac Studio上的官方2in1电脑模拟器验证Mac远端画面、鼠标与基础键盘，以及登录态安全保存与恢复。Windows已修复设备选项被禁用与键码不兼容，画面、鼠标和基础键盘曾实际通过；2026-10-18保留仅针对Windows的候选POST分段后再次出画面，同一诊断版本三次普通连接3/3收到首帧，但持续连接仍发生信令心跳中断，公网稳定性未通过，见[Windows互通记录](./docs/验收/2026-10-17-Windows互通.md)。已补齐信令会话刷新；此前Mac长连接约17分48秒后中断，20次普通重连成功18次，稳定性尚未通过，见[稳定性测试记录](./docs/验收/2026-10-17-稳定性测试.md)。用户目前没有鸿蒙电脑，实体设备尚未验收，尚未公开到GitHub。项目为独立开发实验，不是网易官方产品。
+应用显示名称为 **UU-HarmonyOS**；侧栏、全部设备和预览使用苹果、Windows、HarmonyOS 三种平台图标。仓库目录、包名 `com.luke.uurea` 和内部标识保留 UU-REA，避免影响现有安装与安全存储。
 
-## 首版范围
+## 支持范围与验证状态
 
-本人UU账号登录、设备列表、选择本人Windows或Mac、单屏画面、鼠标、基础键盘、主动断开。不以自建被控程序或VNC替代官方UU客户端；仅放开协议已确认的Windows平台1与Mac平台4，设备仍须允许控制。
+已实现本人账号短信登录、登录态安全恢复、设备列表、单屏画面、鼠标、基础键盘、连接失败重试和主动断开。只允许已确认的 Mac / Windows 平台及允许控制的设备连接；不需要额外安装自建被控程序或 Node 网关。
 
-2026-10-18已参照Mac官方UU重整设备主页、连接流程和远控工具栏：侧栏设备与全部设备、独立连接进度/错误重试、控制中心、自适应/实际大小、键鼠开关、鸿蒙窗口全屏与退出确认。登录恢复后直接进入主页；初始化、诊断和协议材料入口位于「设置 → 开发者设置」，默认折叠。新版已在API23电脑模拟器用真实Windows画面与键鼠验证，见[界面对齐验收](./docs/验收/2026-10-18-Mac界面对齐.md)。
+以下是截至 **2026-10-20** 的实际验证，主控环境为 Mac 上的官方 HarmonyOS 6.1 / API23 电脑（2in1）模拟器，**不代表鸿蒙实体电脑验收**。
 
-反向的“Windows官方UU控制鸿蒙”尚未实现。独立API23被控能力探针已实际通过用户授权的全局鼠标与跨应用键盘；原始屏幕取帧及NDK H.264编码未通过，仍阻塞完整被控端的媒体验证，见[探针验收](./docs/验收/2026-10-18-被控能力探针.md)。探针没有接入UU，也未覆盖现有主控程序。
+| 项目 | 状态 | 验证边界 |
+| --- | --- | --- |
+| 控制官方 Mac UU | PASS（本地模拟器） | 画面、鼠标、基础键盘、主动断开；稳定性版本通过同一媒体会话 20 分钟、20/20 次普通重连和 3/3 次冷启动。其中一轮重连经一次有限握手重试成功；受控信令故障后恢复及恢复后输入也已验证。 |
+| 控制官方 Windows UU | PARTIAL | 曾实际通过画面、鼠标、基础键盘；后续仍出现信令心跳中断，持续连接稳定性未通过。 |
+| 官方 Mac UU 中的设备分组 | PASS | 鸿蒙端已显示在“电脑”分组，官方客户端沿用 Mac 类别图标；本应用内按本端身份显示 HarmonyOS 图标。 |
+| UU-HarmonyOS 名称与平台图标 | PASS（本地模拟器） | 覆盖安装、登录态恢复及界面核对通过；新版完成一次 Mac 连接、媒体更新与正常断开，未重跑完整 20 分钟/20 轮稳定性测试。 |
+| 官方 Mac / Windows UU 反向控制鸿蒙 | 未完成 | 独立被控能力探针尚未完成屏幕采集、编码及 UU 协议集成，当前应用不提供被控功能。 |
 
-## 结构与技术路线
+当前不承诺任何网络下都能连接。中文/IME、完整多节点轮换和鸿蒙实体电脑兼容性尚未验收。失败样本、版本与验收细节见[本地 Mac 稳定性与电脑分组](docs/验收/2026-10-20-本地Mac稳定性与电脑分组.md)和[Windows 互通记录](docs/验收/2026-10-17-Windows互通.md)。
 
-- `entry/`、`AppScope/`：ArkTS Stage桌面应用，ArkWeb与原生网络桥。
-- `web/`：本地WebRTC主控页面、UU协议编解码与会话。
-- `scripts/`：本机构建入口。
-- `docs/方案/`：首版范围、技术路线和实施计划。
-- `docs/调研/`：来源与本机分析记录。
-- `.local/`：已忽略的本机静态研究证据，不用于分发。
+## 项目结构
 
-ArkTS处理禁止重定向的HTTPS，信令采用Engine.IO/Socket.IO polling且不升级WSS；ArkWeb处理视频与数据通道。所有控制端组件位于鸿蒙应用内，不要求另装被控程序或常驻Node网关。信令服务器下发的公网IPv4通过应用内DNS规则绑定到证书中的NRD服务域名，保留系统TLS验证；Mac UU4.39.1及用户本人的Windows UU4.41.0与API23模拟器之间曾实际通过媒体和基础输入，Windows已再次连通画面，持续连接仍会失败。
+- `entry/`、`AppScope/`：ArkTS Stage 桌面应用、ArkWeb、原生网络桥、HUKS 和安全会话存储。
+- `web/`：TypeScript 界面、UU 协议、WebRTC 媒体与输入通道、单元测试。
+- `scripts/`：构建入口及原生策略、传输、签名和会话检查。
+- `docs/`：方案、来源与分版本验收记录。
+- `.local/`：已忽略的本机研究、诊断和私人运行证据，不参与分发。
 
-## 当前前置条件
+ArkTS 负责 HTTPS 和 Engine.IO / Socket.IO polling 信令，ArkWeb 负责视频与数据通道。网络请求保留系统 TLS 验证并限制目标域名；不会自动提取官方 UU 客户端的账号凭据。
 
-本机已安装DevEco Studio、API26 SDK与Xcode，本机Mac官方UU版本为4.39.1。当前调试目标是HarmonyOS 6.1.0/API23的官方2in1电脑模拟器。HUKS签名、UU登录、设备发现、房间与信令、SDP/ICE、H.264实际画面均已验证。登录态使用AssetStoreKit，实际强制结束应用再启动、覆盖安装后恢复登录；退出后再次启动确认不再恢复。通过鸿蒙远端画面点击计算器得到1+2=3；通过鸿蒙键盘事件输入7+8并回车得到15。普通重连有成功记录，也出现过超时，持续稳定性尚未验收。详细结果见[电脑模拟器调试记录](./docs/验收/2026-10-17-电脑模拟器调试.md)。未来真机型号和系统尚未确定。
+## 本机构建
 
-协议签名材料不嵌入源码，HMAC接口缺少平台密钥时返回 `MATERIAL_MISSING`；此时不会假装登录或连接成功。缺失分支已验证，随后从固定MIT参考安全配置客户端共享协议材料，HUKS离线自检及真实初始化通过。用户后续明确授权Agent通过本机短信完成登录；已实际请求一次验证码、仅在进程内读取本次UU短信并填回应用，登录成功并读取两台桌面设备，手机号与验证码输入框已清空。未提取官方Mac客户端的账户Token。
-
-应用内的「本机协议材料设置」通过密码框在本地显式保存/替换HUKS材料，成功或失败后清空输入；不经过网络、普通文件或聊天。HUKS导入与HMAC接口已实现，当前API23电脑模拟器已经通过导入与离线HMAC比对；未来实体设备仍须验证。材料须与实际UU协议匹配，代码不自动生成替代材料。
-
-## 本机构建与检查
+需要 macOS、DevEco Studio 及其内置 Node / JBR / HarmonyOS SDK。项目当前编译和目标 SDK 为 26，兼容下限为 HarmonyOS 6.1 / API23，以 [build-profile.json5](build-profile.json5) 为准。在 DevEco Studio 中打开仓库并完成 SDK 与项目依赖同步，然后在仓库根目录执行以下命令。首次直接从 DevEco 运行应用前，也须先生成网页资源：
 
 ```bash
-cd /Users/luke/DevEcoStudioProjects/UU-REA
+export UU_REA_DEVECO="${UU_REA_DEVECO:-/Applications/DevEco-Studio.app/Contents}"
+export PATH="$UU_REA_DEVECO/tools/node/bin:$PATH"
 npm --prefix web ci --ignore-scripts
-npm --prefix web test
+./scripts/check-all.sh
 ./scripts/build-all.sh
 ```
 
-完整构建先生成本地网页资源，再打包鸿蒙HAP。`scripts/harmony-build.sh` 使用DevEco内置Node/JBR/SDK，不依赖全局工具，不配置签名。当前兼容下限以 `build-profile.json5` 为准，须与真机API核对后才能认定可安装。
-
-## 凭据与设备
-
-不要把验证码、账户Token、连接密码或签名材料粘贴到聊天、写入JSON或提交Git。macOS本地凭据映射见 [AGENTS.md](./AGENTS.md)。鸿蒙登录Token与主控身份使用AssetStoreKit加密保存，仅设备解锁时可读取，不允许同步，卸载后不保留；启动恢复后读取UU设备验证有效性，退出删除，业务1120自动失效。手机号、验证码、房间Token不持久化；安全存储失败会明确提示，不回退明文。
-
-模拟器启动后，或未来连接鸿蒙电脑并允许调试后，可使用DevEco内置工具检查：
+构建脚本默认查找 `/Applications/DevEco-Studio.app/Contents`；若 DevEco 安装在其他位置，先将 `UU_REA_DEVECO` 设置为其 `Contents` 目录，再执行上述命令，例如：
 
 ```bash
-/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
+export UU_REA_DEVECO="/path/to/DevEco-Studio.app/Contents"
 ```
 
-真机安装还需要用户自己的HarmonyOS开发者签名；本项目不复制其他项目的证书或签名配置。构建成功、签名成功、安装成功和远控成功分别验收。
+完整构建会生成网页资源、复制到 `entry/src/main/resources/rawfile/` 并打包鸿蒙应用；这些生成资源不纳入 Git。产物为 `entry/build/default/outputs/default/entry-default-unsigned.hap`。首次克隆及 Web 修改后应运行 `build-all.sh`，保持源码与打包资源一致；仅执行原生构建或直接从 DevEco 运行不会自动更新网页。
 
-## 参考与许可
+`check-all.sh` 运行 Web 单元测试、TypeScript 检查，以及原生网络策略、传输、签名和安全会话的离线检查，不访问 UU 服务或操作设备。
 
-协议与浏览器会话参考MIT许可的 [fang12100/uuremote固定版本](https://github.com/fang12100/uuremote/tree/aa2e12af69031f7d74eb6a86d967317ac5957053)。复用范围与声明见 `THIRD_PARTY_NOTICES.md`。原OpenUUYC整体未采用开源许可，本项目不复制其原创实现。
+构建不包含开发者证书或签名配置。实体设备安装需要自己的 HarmonyOS 开发者签名及设备调试授权；编译、签名、安装与远控成功分别验证。连接模拟器或调试设备后，可使用 DevEco 内置 `hdc list targets` 检查目标。
 
-详细范围见 [首版范围与技术路线](./docs/方案/2026-10-17-首版范围与技术路线.md)。当前先在官方电脑模拟器中验证画面、鼠标、键盘，记录实际成功与限制后再准备GitHub公开与短视频；模拟器结果不表述为真机验证。
+## 首次运行与凭据
+
+1. 在“设置 → 开发者设置 → 协议材料”中，通过本地密码框导入合法获得且与 UU 协议匹配的签名材料。材料写入鸿蒙 HUKS，不随源码或安装包分发；缺失时显示 `MATERIAL_MISSING` 并阻止认证请求。
+2. 在应用内使用本人手机号与短信验证码登录；被控电脑的官方 UU 客户端须登录同一账号并允许控制。
+3. 选择可控制的 Mac 或 Windows 进入桌面，结束后使用“退出远控”正常断开。
+
+登录 Token 与主控身份使用 AssetStoreKit 加密保存，启动恢复后向 UU 验证；退出登录会删除，业务码 1120 会使登录态失效。手机号、验证码和房间凭据不持久化，安全存储失败不会回退为明文。
+
+不要将验证码、Token、连接密码、签名材料或签名证书写入源码、普通配置、日志、截图或 Git。本地 macOS 辅助工具优先从 Login Keychain 读取凭据，映射见 [AGENTS.md](AGENTS.md)。
+
+## 文档与来源
+
+- [首版范围与技术路线](docs/方案/2026-10-17-首版范围与技术路线.md)
+- [本地 Mac 稳定性、电脑分组及名称图标验收](docs/验收/2026-10-20-本地Mac稳定性与电脑分组.md)
+- [Windows 互通与稳定性限制](docs/验收/2026-10-17-Windows互通.md)
+- [设备主页与远控界面验收](docs/验收/2026-10-18-Mac界面对齐.md)
+- [独立被控能力探针](docs/验收/2026-10-18-被控能力探针.md)
+
+协议与浏览器会话参考 MIT 许可的 [fang12100/uuremote 固定提交](https://github.com/fang12100/uuremote/tree/aa2e12af69031f7d74eb6a86d967317ac5957053)。平台图标来自 Simple Icons 固定版本，采用 CC0-1.0。具体复用范围、固定来源及许可全文见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。原 OpenUUYC 整体未采用开源许可，本项目不复制其原创实现。
