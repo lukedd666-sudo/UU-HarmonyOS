@@ -25,3 +25,7 @@ local.properties
 *.key
 .npmrc
 .ohpmrc
+# Local agent tool state, not project content.
+.superpowers/
+.v2c/
+.video_agent/
