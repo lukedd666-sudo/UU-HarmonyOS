@@ -84,3 +84,7 @@ export UU_REA_DEVECO="/path/to/DevEco-Studio.app/Contents"
 原始方案、调研和逐轮调试记录保留在本地归档；仓库文档汇总仍适用于当前实现的设计与分版本验证结论。
 
 协议与浏览器会话参考 MIT 许可的 [fang12100/uuremote 固定提交](https://github.com/fang12100/uuremote/tree/aa2e12af69031f7d74eb6a86d967317ac5957053)。平台图标来自 Simple Icons 固定版本，采用 CC0-1.0。具体复用范围、固定来源及许可全文见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。原 OpenUUYC 整体未采用开源许可，本项目不复制其原创实现。
+
+## 许可
+
+本项目自身代码以 [MIT](LICENSE) 发布；第三方复用组件的许可与来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
